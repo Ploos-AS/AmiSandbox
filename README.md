@@ -15,8 +15,11 @@ AmiSandbox is under active early development.
 Current milestone state:
 
 - **M0 — complete:** project identity, security model, architecture, machine profiles, event/session model, upstream policy.
-- **M1 — implemented, qualification pending:** opt-in analysis sessions, `session.json`, versioned JSONL event stream, and CPU snapshot event format.
-- **M1.1 — implemented, runtime qualification pending:** live 68k D0-D7/A0-A7/PC/SR sampling through Amiberry IPC into `cpu-snapshots.jsonl`.
+- **M1 — qualified:** opt-in analysis sessions, `session.json`, versioned JSONL event stream, lifecycle events, and preserved normal Amiberry behavior when analysis mode is disabled.
+- **M1.1 — qualified:** live 68k D0-D7/A0-A7/PC/SR sampling through Amiberry IPC into `cpu-snapshots.jsonl`, including IPC readiness handling.
+- **M1.2 — in progress:** first memory-observation slice, focused on low-memory/vector change detection before broader write tracing.
+
+M1/M1.1 runtime qualification passed in GitHub Actions run `34658255305` at commit `61b75ba1d87831691c5ce5e32b8e9744959af475`.
 
 See:
 
@@ -103,7 +106,7 @@ export AMISANDBOX_ANALYSIS_DIR="$PWD/analysis/session-001"
 python3 tools/amisandbox_cpu_sampler.py --interval-ms 100
 ```
 
-The sampler uses Amiberry's existing `GET_CPU_REGS` Unix-socket command. This keeps the first CPU-observation implementation outside the hot emulation loops and minimizes divergence from upstream Amiberry.
+The sampler uses Amiberry's existing `GET_CPU_REGS` Unix-socket command. It waits for IPC readiness before starting sampling, which avoids a startup race where the Unix socket exists before the emulator event loop can service commands.
 
 ## Event model
 

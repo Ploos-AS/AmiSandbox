@@ -1,6 +1,6 @@
 # AmiSandbox M1 Qualification
 
-Status: **IMPLEMENTED — runtime qualification pending**
+Status: **QUALIFIED — PASS**
 
 M1 establishes the first end-to-end AmiSandbox analysis boundary without changing normal Amiberry behavior when analysis mode is not requested.
 
@@ -38,11 +38,27 @@ Expected artifacts:
 
 `events.jsonl` must begin with a `session.start` event and end with `session.stop` after a normal emulator exit.
 
-## Important M1 limitation
+## Qualification evidence
 
-M1 defines and implements the CPU snapshot event representation, but does **not yet hook it into the 68k execution loop**. That hook is intentionally deferred to M1.1 so the first core modification can be reviewed and qualified separately. M1 therefore proves the session, metadata, event-stream, and opt-in runtime boundary first.
+GitHub Actions runtime qualification passed on the `master` branch:
 
-M1 also records the intended safe defaults (`jit_enabled=false`, `external_networking_enabled=false`) as analysis metadata. Enforcement of those emulator preferences belongs to the next isolation milestone and must not be inferred solely from the metadata fields.
+- workflow: `AmiSandbox Runtime Qualification`
+- run: `34658255305`
+- qualified commit: `61b75ba1d87831691c5ce5e32b8e9744959af475`
+- job: `runtime-qual-m1-m1_1`
+- conclusion: `success`
+
+The run verified:
+
+1. analysis build with `USE_JIT=OFF` and `USE_IPC_SOCKET=ON`;
+2. M1 and M1.1 static contract checks;
+3. runtime startup with the built-in AROS fallback ROM;
+4. creation and validation of `session.json`;
+5. `session.start` / `session.stop` lifecycle ordering;
+6. clean emulator shutdown through IPC; and
+7. a separate no-analysis smoke test with AmiSandbox analysis environment variables unset, proving that the opt-in boundary preserves normal Amiberry behavior.
+
+Qualification evidence was uploaded by the workflow as `amisandbox-m1-m1_1-runtime-evidence`.
 
 ## Static qualification
 
@@ -58,19 +74,14 @@ Expected:
 PASS: AmiSandbox M1 analysis-session contract
 ```
 
-## Build/runtime qualification still required
+## Scope boundary
 
-Before marking M1 fully qualified:
+M1 proves the session, metadata, event-stream, opt-in runtime boundary and stable artifact generation. Live CPU sampling is qualified separately as M1.1.
 
-1. Configure and build the normal Amiberry target.
-2. Run `tools/check_amisandbox_m1.py`.
-3. Launch once with `AMISANDBOX_ANALYSIS_DIR` unset and verify normal behavior.
-4. Launch once with the environment variables above.
-5. Verify valid JSON in `session.json` and every line of `events.jsonl`.
-6. Verify session start/stop ordering and monotonically increasing sequence values.
+M1 records the intended safe defaults (`jit_enabled=false`, `external_networking_enabled=false`) as analysis metadata. Enforcement of emulator preferences belongs to later isolation milestones and must not be inferred solely from metadata fields.
 
-No proprietary Kickstart ROM is required for the static contract check. Guest runtime qualification may use a legally supplied ROM or an appropriate open replacement.
+No proprietary Kickstart ROM is required for the automated qualification path; the GitHub Actions runtime qualification uses Amiberry's built-in AROS fallback ROM.
 
-## Next: M1.1
+## Result
 
-M1.1 should add the first narrow emulator-core hook: capture an explicit CPU/register snapshot at a deterministic lifecycle point, then qualify that hook on a 68000 profile with JIT disabled.
+**PASS — M1 is runtime-qualified.**

@@ -1,155 +1,186 @@
-# Amiberry
+# AmiSandbox
 
-[![C/C++ CI](https://github.com/BlitterStudio/amiberry/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/BlitterStudio/amiberry/actions/workflows/c-cpp.yml)
-[![Development Builds](https://img.shields.io/badge/Dev%20Builds-nightly.link-orange)](https://nightly.link/BlitterStudio/amiberry/workflows/c-cpp.yml/master)
-[![Discord](https://img.shields.io/badge/Discord-Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/wWndKTGpGV)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/X8X4FHDY4)
+**Amiberry Malware Analysis Edition**
 
-**Optimized Amiga emulator for Linux, macOS, Windows, Android, FreeBSD, and Haiku.**
+AmiSandbox is a malware-analysis-focused fork of [Amiberry](https://github.com/BlitterStudio/amiberry), designed for controlled dynamic analysis of Amiga malware, viruses, suspicious executables, bootblocks, disk images, and related artifacts.
 
-Built on the WinUAE emulation core, Amiberry delivers full Amiga compatibility across ARM, x86, RISC-V, and LoongArch64 hardware — from a Raspberry Pi to a desktop workstation. Custom JIT compilation for ARM64 and x86-64 provides maximum emulation speed.
+The project keeps the upstream emulator as intact as practical while adding deterministic execution, instrumentation, event capture, artifact collection, and automation for malware research.
 
-## Sponsors
+> AmiSandbox is an independent fork. Amiberry remains the upstream emulator project.
 
-A huge thank you to the companies and individuals who support Amiberry development.
+## Project status
 
-### Certified Partners
+AmiSandbox is under active early development.
 
-[![Certified Partner](https://amiberry.com/assets/badges/badge-certified-partner.svg)](https://ko-fi.com/midwan)
+Current milestone state:
 
-### Partners
+- **M0 — complete:** project identity, security model, architecture, machine profiles, event/session model, upstream policy.
+- **M1 — implemented, qualification pending:** opt-in analysis sessions, `session.json`, versioned JSONL event stream, and CPU snapshot event format.
+- **M1.1 — in progress:** live 68k CPU/register snapshot capture from the emulator execution path.
 
-[![Partner](https://amiberry.com/assets/badges/badge-partner.svg)](https://ko-fi.com/midwan)
+See:
 
-### Supporters
+- [`docs/AMISANDBOX_M0.md`](docs/AMISANDBOX_M0.md)
+- [`docs/M1_QUALIFICATION.md`](docs/M1_QUALIFICATION.md)
 
-[![Supporter](https://amiberry.com/assets/badges/badge-supporter.svg)](https://ko-fi.com/midwan)
+## Goals
 
-> **[View full sponsor details on amiberry.com](https://amiberry.com#sponsors)**
+AmiSandbox aims to provide a reproducible dynamic-analysis environment for classic Amiga software, including malware that bypasses AmigaOS APIs and interacts directly with memory, exception vectors, disk hardware, or custom chips.
 
----
+Planned analysis capabilities include:
 
-## Commercial Use & Sponsorship
+- CPU/register snapshots and instruction tracing
+- memory-write tracing and watchpoints
+- exception/vector-table monitoring
+- Exec task, process, library, and device activity
+- executable loading activity such as `LoadSeg()` and `CreateProc()`
+- floppy and hard-disk I/O tracing
+- bootblock read/write detection
+- pre/post disk-image hashing
+- memory dumps and snapshots
+- screenshots and other run artifacts
+- isolated network capture when explicitly enabled
+- machine-readable JSON/JSONL output for automation
 
-Amiberry is free and open source under the [GPL v3 license](LICENSE).
-You are welcome to use, modify, and redistribute it under those terms.
+## Security model
 
-**If you are shipping a commercial product, paid subscription service, or
-hardware bundle that includes Amiberry**, we ask that you support the project
-financially. Amiberry is maintained by a single developer — the features and
-platforms your product depends on exist because of community and corporate support.
+AmiSandbox treats every analyzed sample as hostile.
 
-### Corporate Sponsorship Tiers
+Analysis mode is intended to default to:
 
-| Tier | Monthly | Benefits |
-|------|---------|----------|
-| 🥉 Supporter | €50/mo | Named on website, listed in release notes |
-| 🥈 Partner | €150/mo | Logo on website + README, early release access, priority issue responses |
-| 🥇 Certified Partner | €300/mo | Everything above + "Amiberry Certified Partner" badge for your product/marketing |
+- JIT disabled
+- external networking disabled
+- no writable host filesystem exposure by default
+- disposable writable disk overlays
+- explicit sample ingress
+- explicit artifact egress
+- deterministic configuration recorded with each session
 
-👉 [Become a corporate sponsor on Ko-Fi](https://ko-fi.com/midwan)
-📧 For custom arrangements, contact: **midwan@gmail.com**
+These controls are defense-in-depth. Emulator isolation alone must not be treated as a complete security boundary against malicious code.
 
-*Individual supporters keep this project alive too —
-[any contribution is appreciated](https://ko-fi.com/midwan).*
+## Initial analysis profiles
 
-> **[Visit amiberry.com](https://amiberry.com)** for the full documentation site.
+The initial target profiles are:
 
-![Custom shaders and bezel overlays](docs/resources/screenshots/shader-bezel-showcase-1.jpg)
-![CRT shader with monitor bezel](docs/resources/screenshots/shader-bezel-showcase-2.jpg)
+1. A500 / Kickstart 1.2
+2. A500 / Kickstart 1.3
+3. A500+ / Kickstart 2.04
+4. A1200 / Kickstart 3.0
+5. A1200 / Kickstart 3.1
 
-## Features
+Kickstart ROM images are not distributed with AmiSandbox.
 
-- **JIT Compiler** — Custom just-in-time compilation for ARM64 and x86-64
-- **WHDLoad Support** — Launch WHDLoad titles directly with automatic configuration
-- **Custom Bezels & Shaders** — CRT monitor frames, overlay effects, and GLSL shader support
-- **Modern GUI** — Clean Dear ImGui interface navigable by mouse or gamepad
-- **Drag & Drop** — Drop floppy images, hard files, and config files directly into the emulator
-- **Auto-Update** — Built-in update checker with SHA256-verified downloads
-- **RetroArch Ready** — Seamless controller mapping for RetroArch setups
+## M1 analysis mode
 
-## Quick Install
-
-### Linux
-
-```bash
-curl -fsSL https://packages.amiberry.com/install.sh | sudo sh
-sudo apt install amiberry
-```
-
-Also available via [PPA](https://launchpad.net/~midwan-a/+archive/ubuntu/amiberry) · [COPR](https://copr.fedorainfracloud.org/coprs/midwan/amiberry/) · [Flatpak](https://flathub.org/apps/com.blitterstudio.amiberry) · [AUR](https://aur.archlinux.org/packages/amiberry) · [.deb/.rpm](https://github.com/BlitterStudio/amiberry/releases/latest)
-
-### macOS
+M1 introduces an opt-in analysis session using environment variables.
 
 ```bash
-brew install --cask amiberry
+export AMISANDBOX_ANALYSIS_DIR="$PWD/analysis/session-001"
+export AMISANDBOX_MACHINE_PROFILE="a500-ks13"
+export AMISANDBOX_CONFIG_FINGERPRINT="example"
+
+./amiberry
 ```
 
-### Windows
+When enabled, AmiSandbox creates analysis artifacts such as:
 
-Download the [installer or portable ZIP](https://github.com/BlitterStudio/amiberry/releases/latest).  x64 and ARM64 (Windows-on-ARM / Snapdragon X, Copilot+) builds are both published.  The portable ZIP includes the `amiberry.portable` marker, so writable paths stay next to `Amiberry.exe` without extra setup.
-
-> **Windows ARM64 in a VM (VMware Fusion / Parallels / Hyper-V):** the guest usually has no OpenGL ICD installed, so Amiberry's GL init fails at startup.  Drop Mesa3D's `opengl32.dll` (`mesa-llvmpipe-arm64` from [mmozeiko/build-mesa](https://github.com/mmozeiko/build-mesa/releases)) next to `Amiberry.exe` — that gives you software OpenGL 3.3+ and the GUI comes up.  Native WoA hardware doesn't need this workaround.
-
-### Android
-
-Available on [Google Play](https://play.google.com/store/apps/details?id=com.blitterstudio.amiberry) (AArch64 & x86_64 with full ARM64 JIT support).
-
-### FreeBSD
-In order to install amiberry on FreeBSD simply use pkg
-
-```bash
-pkg install amiberry
+```text
+analysis/session-001/
+├── session.json
+└── events.jsonl
 ```
 
-Or if you prefer to install from Source then
+Normal Amiberry operation remains unchanged when `AMISANDBOX_ANALYSIS_DIR` is not set.
 
-```bash
-git clone --depth 1 https://github.com/freebsd/freebsd-ports /usr/ports
-cd /usr/ports/emulators/amiberry
-make install
+## Event model
+
+The JSONL event stream is versioned and designed to remain consumable by external analysis tooling.
+
+Initial event classes include:
+
+- `session.start`
+- `session.stop`
+- `cpu.snapshot`
+
+Future milestones will add memory, disk, bootblock, process, library, chipset, snapshot, and network events.
+
+## Intended ecosystem
+
+```text
+AmiGuard / analyst sample
+          |
+          v
+AmiGuard Signature Workstation (ASW)
+          |
+          v
+      AmiSandbox
+          |
+   dynamic artifacts
+          |
+          v
+     AmiForensics
+          |
+          v
+signatures / reports / research
 ```
 
-## Code Signing
+AmiSandbox is also intended to remain useful as a standalone malware-analysis workstation.
 
-Release binaries are signed through SignPath. See the [Code signing policy](https://amiberry.com/code-signing-policy) for signing scope, release approval roles, and privacy notes.
+## Building
 
-## Documentation
-
-- **[Getting Started](https://github.com/BlitterStudio/amiberry/wiki/First-Installation)** — First installation guide
-- **[Full Wiki](https://github.com/BlitterStudio/amiberry/wiki)** — Complete documentation
-- **[Build from Source](https://github.com/BlitterStudio/amiberry/wiki/Compile-from-source)** — Compile for your platform
-- **[Troubleshooting](https://github.com/BlitterStudio/amiberry/wiki/Troubleshooting)** — Common issues and solutions
-
-## Building from Source
+AmiSandbox currently follows the upstream Amiberry build system.
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
-See the [build guide](https://github.com/BlitterStudio/amiberry/wiki/Compile-from-source) for platform-specific instructions, dependencies, and build options.
+For analysis-oriented builds, JIT should be disabled:
+
+```bash
+cmake -B build-analysis \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DUSE_JIT=OFF
+cmake --build build-analysis -j$(nproc)
+```
+
+Platform-specific build requirements remain largely the same as upstream Amiberry. See the [Amiberry build documentation](https://github.com/BlitterStudio/amiberry/wiki/Compile-from-source).
+
+## Upstream relationship
+
+AmiSandbox is derived from Amiberry, which in turn uses the WinUAE emulation core.
+
+We aim to:
+
+- keep AmiSandbox-specific code isolated where practical
+- minimize unnecessary divergence from Amiberry
+- periodically integrate appropriate upstream changes
+- submit generally useful emulator fixes upstream when practical
+- keep malware-analysis-specific behavior in AmiSandbox unless upstream wants it
+
+Upstream project:
+
+- [BlitterStudio/amiberry](https://github.com/BlitterStudio/amiberry)
+- [amiberry.com](https://amiberry.com/)
 
 ## Contributing
 
-Contributions are welcome — bug reports, feature suggestions, and pull requests all help make Amiberry better.
+Contributions are welcome, especially around:
 
-1. Fork the repository
-2. Create your feature branch: `git checkout -b feature/my-feature`
-3. Commit your changes: `git commit -m 'Add my feature'`
-4. Push to the branch: `git push origin feature/my-feature`
-5. Open a Pull Request
+- emulator instrumentation
+- deterministic execution
+- Amiga malware research
+- forensic artifact formats
+- safe sample handling
+- automated qualification
+- documentation and test coverage
 
-## Community
+Please keep generic emulator changes separable from AmiSandbox-specific analysis functionality whenever practical.
 
-[![Discord](https://img.shields.io/badge/Discord-Join%20Chat-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/wWndKTGpGV)
-[![Mastodon](https://img.shields.io/badge/Mastodon-Follow-6364FF?style=for-the-badge&logo=mastodon&logoColor=white)](https://mastodon.social/@midwan)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/X8X4FHDY4)
+## License and attribution
 
-## License
+AmiSandbox is derived from Amiberry and is distributed under the **GNU General Public License v3.0**. See [`LICENSE`](LICENSE).
 
-Amiberry is licensed under the [GNU General Public License v3.0](LICENSE).
+Copyright and attribution notices from Amiberry, WinUAE, and other upstream components remain applicable to their respective code.
 
----
-
-Supported by [JetBrains](https://jb.gg/OpenSourceSupport).
+AmiSandbox additions are developed by the Ploos-AS project contributors.

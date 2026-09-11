@@ -19,6 +19,8 @@ from typing import TextIO
 
 SCHEMA_VERSION = 1
 DEFAULT_INTERVAL_MS = 100
+DEFAULT_REQUEST_TIMEOUT = 1.0
+DEFAULT_READY_TIMEOUT = 15.0
 
 
 def default_socket_path(instance: int = 0) -> Path:
@@ -28,7 +30,7 @@ def default_socket_path(instance: int = 0) -> Path:
     return Path(f"{base}{suffix}")
 
 
-def request(socket_path: Path, command: str, timeout: float = 1.0) -> list[str]:
+def request(socket_path: Path, command: str, timeout: float = DEFAULT_REQUEST_TIMEOUT) -> list[str]:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
         client.connect(str(socket_path))
@@ -42,11 +44,37 @@ def request(socket_path: Path, command: str, timeout: float = 1.0) -> list[str]:
             if b"\n" in chunk:
                 break
 
+    if not chunks:
+        raise RuntimeError("empty IPC response")
     line = b"".join(chunks).decode("utf-8", errors="strict").splitlines()[0]
     fields = line.split("\t")
     if not fields or fields[0] != "OK":
         raise RuntimeError(line or "empty IPC response")
     return fields[1:]
+
+
+def wait_for_ipc(socket_path: Path, ready_timeout: float) -> None:
+    """Wait until the IPC socket is not only present, but processing commands.
+
+    Amiberry creates the Unix socket early in startup. On slower/headless hosts,
+    especially GitHub Actions under Xvfb, the socket can exist while video/GUI
+    initialization still keeps the main event loop from servicing commands.
+    Treat socket presence as transport readiness only and probe GET_VERSION until
+    the command path is responsive.
+    """
+    deadline = time.monotonic() + ready_timeout
+    last_error: Exception | None = None
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = f": {last_error}" if last_error is not None else ""
+            raise TimeoutError(f"IPC did not become responsive within {ready_timeout:g}s{detail}")
+        try:
+            request(socket_path, "GET_VERSION", timeout=min(DEFAULT_REQUEST_TIMEOUT, remaining))
+            return
+        except (FileNotFoundError, ConnectionRefusedError, socket.timeout, RuntimeError) as exc:
+            last_error = exc
+            time.sleep(min(0.1, max(0.0, remaining)))
 
 
 def parse_cpu_regs(fields: list[str]) -> dict[str, object]:
@@ -95,6 +123,12 @@ def main() -> int:
     parser.add_argument("--interval-ms", type=int, default=DEFAULT_INTERVAL_MS, help="sampling interval in milliseconds")
     parser.add_argument("--count", type=int, default=0, help="number of snapshots; 0 means until interrupted")
     parser.add_argument("--output", type=Path, help="output JSONL path")
+    parser.add_argument(
+        "--ready-timeout",
+        type=float,
+        default=DEFAULT_READY_TIMEOUT,
+        help="seconds to wait for Amiberry IPC command processing (default: 15)",
+    )
     args = parser.parse_args()
 
     if args.interval_ms < 1:
@@ -103,6 +137,8 @@ def main() -> int:
         parser.error("--count must be >= 0")
     if args.instance < 0 or args.instance > 9:
         parser.error("--instance must be between 0 and 9")
+    if args.ready_timeout <= 0:
+        parser.error("--ready-timeout must be > 0")
 
     socket_path = args.socket or default_socket_path(args.instance)
     session_dir = os.environ.get("AMISANDBOX_ANALYSIS_DIR")
@@ -111,6 +147,7 @@ def main() -> int:
 
     sequence = 0
     try:
+        wait_for_ipc(socket_path, args.ready_timeout)
         with output_path.open("a", encoding="utf-8") as out:
             while args.count == 0 or sequence < args.count:
                 fields = request(socket_path, "GET_CPU_REGS")

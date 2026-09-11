@@ -180,6 +180,69 @@ jobs:
           print('PASS: M1 session.stop observed after clean emulator exit')
           PY
 
+      - name: No-analysis normal-mode smoke test
+        shell: bash
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          unset AMISANDBOX_ANALYSIS_DIR AMISANDBOX_MACHINE_PROFILE AMISANDBOX_CONFIG_FINGERPRINT
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          export IPC_SOCKET
+          rm -f "$IPC_SOCKET"
+          rm -rf /tmp/amisandbox-no-analysis
+
+          xvfb-run -a ./build-m1_1/amiberry --model A500 -G -S 0 --log \
+            > /tmp/amisandbox-no-analysis.log 2>&1 &
+          AMIBERRY_PID=$!
+
+          cleanup() {
+            if kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              kill "$AMIBERRY_PID" || true
+              wait "$AMIBERRY_PID" || true
+            fi
+            rm -f "$IPC_SOCKET"
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 60); do
+            if [ -S "$IPC_SOCKET" ]; then
+              break
+            fi
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              echo 'Amiberry exited before IPC became available in no-analysis mode'
+              cat /tmp/amisandbox-no-analysis.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test -S "$IPC_SOCKET"
+          test ! -e /tmp/amisandbox-no-analysis/session.json
+          test ! -e /tmp/amisandbox-no-analysis/events.jsonl
+
+          python3 - <<'PY'
+          import os
+          import socket
+          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          s.connect(os.environ['IPC_SOCKET'])
+          s.sendall(b'QUIT\n')
+          response = s.recv(4096).decode(errors='replace').strip()
+          s.close()
+          assert response.startswith('OK'), response
+          print('PASS: normal mode started and accepted clean QUIT with analysis env unset')
+          PY
+
+          for i in $(seq 1 40); do
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          wait "$AMIBERRY_PID"
+          trap - EXIT
+          rm -f "$IPC_SOCKET"
+          echo 'PASS: no analysis artifacts created with AMISANDBOX_ANALYSIS_DIR unset'
+
       - name: Upload qualification evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -188,5 +251,6 @@ jobs:
           path: |
             /tmp/amisandbox-m1_1/
             /tmp/amisandbox-amiberry.log
+            /tmp/amisandbox-no-analysis.log
           if-no-files-found: warn
           retention-days: 14

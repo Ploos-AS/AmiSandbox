@@ -75,7 +75,13 @@ jobs:
           set -euo pipefail
           rm -rf "$AMISANDBOX_ANALYSIS_DIR"
           mkdir -p "$AMISANDBOX_ANALYSIS_DIR"
-          rm -f /tmp/amiberry.sock
+
+          # Amiberry follows XDG_RUNTIME_DIR for its Unix IPC socket when set.
+          # GitHub's Ubuntu runner sets this to /run/user/<uid>, not /tmp.
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          export IPC_SOCKET
+          echo "IPC_SOCKET=$IPC_SOCKET"
+          rm -f "$IPC_SOCKET"
 
           xvfb-run -a ./build-m1_1/amiberry --model A500 -G -S 0 --log \
             > /tmp/amisandbox-amiberry.log 2>&1 &
@@ -87,11 +93,12 @@ jobs:
               kill "$AMIBERRY_PID" || true
               wait "$AMIBERRY_PID" || true
             fi
+            rm -f "$IPC_SOCKET"
           }
           trap cleanup EXIT
 
           for i in $(seq 1 60); do
-            if [ -S /tmp/amiberry.sock ]; then
+            if [ -S "$IPC_SOCKET" ]; then
               break
             fi
             if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
@@ -102,12 +109,12 @@ jobs:
             sleep 0.5
           done
 
-          test -S /tmp/amiberry.sock
+          test -S "$IPC_SOCKET"
           test -f "$AMISANDBOX_ANALYSIS_DIR/session.json"
           test -f "$AMISANDBOX_ANALYSIS_DIR/events.jsonl"
 
           python3 tools/amisandbox_cpu_sampler.py \
-            --socket /tmp/amiberry.sock \
+            --socket "$IPC_SOCKET" \
             --count 12 \
             --interval-ms 100
 
@@ -145,9 +152,10 @@ jobs:
 
           # Ask Amiberry to exit cleanly so M1 writes session.stop.
           python3 - <<'PY'
+          import os
           import socket
           s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-          s.connect('/tmp/amiberry.sock')
+          s.connect(os.environ['IPC_SOCKET'])
           s.sendall(b'QUIT\n')
           print(s.recv(4096).decode(errors='replace').strip())
           s.close()
@@ -161,6 +169,7 @@ jobs:
           done
           wait "$AMIBERRY_PID"
           trap - EXIT
+          rm -f "$IPC_SOCKET"
 
           python3 - <<'PY'
           import json

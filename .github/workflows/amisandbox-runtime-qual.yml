@@ -1,0 +1,182 @@
+name: AmiSandbox Runtime Qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'src/amisandbox/**'
+      - 'src/osdep/main.cpp'
+      - 'src/osdep/amiberry_ipc*'
+      - 'tools/amisandbox_cpu_sampler.py'
+      - 'tools/check_amisandbox_m1.py'
+      - 'tools/check_amisandbox_m1_1.py'
+      - '.github/workflows/amisandbox-runtime-qual.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-qual-m1-m1_1:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install build and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build xvfb xauth \
+            libflac-dev libmpeg2-4-dev libpng-dev libasound2-dev \
+            libmpg123-dev libportmidi-dev libserialport-dev libenet-dev \
+            libpcap-dev libzstd-dev libcurl4-openssl-dev nlohmann-json3-dev
+
+      - name: Install SDL3 and SDL3_image
+        id: sdl
+        uses: libsdl-org/setup-sdl@main
+        with:
+          install-linux-dependencies: true
+          version: 3.2.8
+          version-sdl-image: 3.2.4
+          pre-release: false
+
+      - name: Static M1/M1.1 contract checks
+        run: |
+          python3 tools/check_amisandbox_m1.py
+          python3 tools/check_amisandbox_m1_1.py
+
+      - name: Build analysis configuration
+        run: |
+          cmake -S . -B build-m1_1 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH='${{ steps.sdl.outputs.prefix }}' \
+            -DUSE_JIT=OFF \
+            -DUSE_IPC_SOCKET=ON \
+            -DUSE_PPC=OFF \
+            -DUSE_QEMU_PPC=OFF
+          cmake --build build-m1_1 -j"$(nproc)"
+
+      - name: Runtime qualification with built-in AROS fallback ROM
+        shell: bash
+        env:
+          AMISANDBOX_ANALYSIS_DIR: /tmp/amisandbox-m1_1
+          AMISANDBOX_MACHINE_PROFILE: a500-aros-ci
+          AMISANDBOX_CONFIG_FINGERPRINT: github-actions-m1_1
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          rm -rf "$AMISANDBOX_ANALYSIS_DIR"
+          mkdir -p "$AMISANDBOX_ANALYSIS_DIR"
+          rm -f /tmp/amiberry.sock
+
+          xvfb-run -a ./build-m1_1/amiberry --model A500 -G -S 0 --log \
+            > /tmp/amisandbox-amiberry.log 2>&1 &
+          AMIBERRY_PID=$!
+          echo "AMIBERRY_PID=$AMIBERRY_PID"
+
+          cleanup() {
+            if kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              kill "$AMIBERRY_PID" || true
+              wait "$AMIBERRY_PID" || true
+            fi
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 60); do
+            if [ -S /tmp/amiberry.sock ]; then
+              break
+            fi
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              echo 'AmiSandbox exited before IPC became available'
+              cat /tmp/amisandbox-amiberry.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+
+          test -S /tmp/amiberry.sock
+          test -f "$AMISANDBOX_ANALYSIS_DIR/session.json"
+          test -f "$AMISANDBOX_ANALYSIS_DIR/events.jsonl"
+
+          python3 tools/amisandbox_cpu_sampler.py \
+            --socket /tmp/amiberry.sock \
+            --count 12 \
+            --interval-ms 100
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/amisandbox-m1_1')
+          session = json.loads((root / 'session.json').read_text())
+          assert session['jit_enabled'] is False
+          assert session['machine_profile'] == 'a500-aros-ci'
+
+          events = [json.loads(line) for line in (root / 'events.jsonl').read_text().splitlines() if line.strip()]
+          assert any(e.get('type') == 'session.start' for e in events)
+
+          snaps = [json.loads(line) for line in (root / 'cpu-snapshots.jsonl').read_text().splitlines() if line.strip()]
+          assert len(snaps) >= 10, len(snaps)
+          for s in snaps:
+              data = s['data']
+              assert len(data['d']) == 8
+              assert len(data['a']) == 8
+              assert 'pc' in data and 'sr' in data
+
+          changing = False
+          keys = ('pc', 'sr')
+          first = snaps[0]['data']
+          for s in snaps[1:]:
+              data = s['data']
+              if any(data[k] != first[k] for k in keys) or data['d'] != first['d'] or data['a'] != first['a']:
+                  changing = True
+                  break
+          assert changing, 'CPU state did not change across samples'
+          print(f'PASS: {len(snaps)} live CPU snapshots; CPU state changed')
+          PY
+
+          # Ask Amiberry to exit cleanly so M1 writes session.stop.
+          python3 - <<'PY'
+          import socket
+          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          s.connect('/tmp/amiberry.sock')
+          s.sendall(b'QUIT\n')
+          print(s.recv(4096).decode(errors='replace').strip())
+          s.close()
+          PY
+
+          for i in $(seq 1 40); do
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          wait "$AMIBERRY_PID"
+          trap - EXIT
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('/tmp/amisandbox-m1_1/events.jsonl')
+          events = [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+          assert any(e.get('type') == 'session.stop' for e in events), events
+          print('PASS: M1 session.stop observed after clean emulator exit')
+          PY
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: amisandbox-m1-m1_1-runtime-evidence
+          path: |
+            /tmp/amisandbox-m1_1/
+            /tmp/amisandbox-amiberry.log
+          if-no-files-found: warn
+          retention-days: 14

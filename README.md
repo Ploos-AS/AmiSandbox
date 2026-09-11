@@ -16,12 +16,13 @@ Current milestone state:
 
 - **M0 — complete:** project identity, security model, architecture, machine profiles, event/session model, upstream policy.
 - **M1 — implemented, qualification pending:** opt-in analysis sessions, `session.json`, versioned JSONL event stream, and CPU snapshot event format.
-- **M1.1 — in progress:** live 68k CPU/register snapshot capture from the emulator execution path.
+- **M1.1 — implemented, runtime qualification pending:** live 68k D0-D7/A0-A7/PC/SR sampling through Amiberry IPC into `cpu-snapshots.jsonl`.
 
 See:
 
 - [`docs/AMISANDBOX_M0.md`](docs/AMISANDBOX_M0.md)
 - [`docs/M1_QUALIFICATION.md`](docs/M1_QUALIFICATION.md)
+- [`docs/M1_1_QUALIFICATION.md`](docs/M1_1_QUALIFICATION.md)
 
 ## Goals
 
@@ -87,14 +88,26 @@ When enabled, AmiSandbox creates analysis artifacts such as:
 ```text
 analysis/session-001/
 ├── session.json
-└── events.jsonl
+├── events.jsonl
+└── cpu-snapshots.jsonl   # when the M1.1 sampler is running
 ```
 
 Normal Amiberry operation remains unchanged when `AMISANDBOX_ANALYSIS_DIR` is not set.
 
+### Live CPU sampling (M1.1)
+
+With IPC enabled, collect live 68k register snapshots from another terminal:
+
+```bash
+export AMISANDBOX_ANALYSIS_DIR="$PWD/analysis/session-001"
+python3 tools/amisandbox_cpu_sampler.py --interval-ms 100
+```
+
+The sampler uses Amiberry's existing `GET_CPU_REGS` Unix-socket command. This keeps the first CPU-observation implementation outside the hot emulation loops and minimizes divergence from upstream Amiberry.
+
 ## Event model
 
-The JSONL event stream is versioned and designed to remain consumable by external analysis tooling.
+The JSONL event streams are versioned and designed to remain consumable by external analysis tooling.
 
 Initial event classes include:
 
@@ -135,12 +148,13 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
-For analysis-oriented builds, JIT should be disabled:
+For analysis-oriented builds, JIT should be disabled and IPC enabled:
 
 ```bash
 cmake -B build-analysis \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DUSE_JIT=OFF
+  -DUSE_JIT=OFF \
+  -DUSE_IPC_SOCKET=ON
 cmake --build build-analysis -j$(nproc)
 ```
 

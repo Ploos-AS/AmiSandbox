@@ -9,8 +9,10 @@ on:
       - 'src/osdep/main.cpp'
       - 'src/osdep/amiberry_ipc*'
       - 'tools/amisandbox_cpu_sampler.py'
+      - 'tools/amisandbox_memory_watch.py'
       - 'tools/check_amisandbox_m1.py'
       - 'tools/check_amisandbox_m1_1.py'
+      - 'tools/check_amisandbox_m1_2.py'
       - '.github/workflows/amisandbox-runtime-qual.yml'
       - 'CMakeLists.txt'
       - 'cmake/**'
@@ -19,7 +21,7 @@ permissions:
   contents: read
 
 jobs:
-  runtime-qual-m1-m1_1:
+  runtime-qual-m1-m1_2:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -48,10 +50,11 @@ jobs:
           version-sdl-image: 3.2.4
           pre-release: false
 
-      - name: Static M1/M1.1 contract checks
+      - name: Static M1/M1.1/M1.2 contract checks
         run: |
           python3 tools/check_amisandbox_m1.py
           python3 tools/check_amisandbox_m1_1.py
+          python3 tools/check_amisandbox_m1_2.py
 
       - name: Build analysis configuration
         run: |
@@ -69,15 +72,13 @@ jobs:
         env:
           AMISANDBOX_ANALYSIS_DIR: /tmp/amisandbox-m1_1
           AMISANDBOX_MACHINE_PROFILE: a500-aros-ci
-          AMISANDBOX_CONFIG_FINGERPRINT: github-actions-m1_1
+          AMISANDBOX_CONFIG_FINGERPRINT: github-actions-m1_2
           SDL_AUDIODRIVER: dummy
         run: |
           set -euo pipefail
           rm -rf "$AMISANDBOX_ANALYSIS_DIR"
           mkdir -p "$AMISANDBOX_ANALYSIS_DIR"
 
-          # Amiberry follows XDG_RUNTIME_DIR for its Unix IPC socket when set.
-          # GitHub's Ubuntu runner sets this to /run/user/<uid>, not /tmp.
           IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
           export IPC_SOCKET
           echo "IPC_SOCKET=$IPC_SOCKET"
@@ -138,19 +139,100 @@ jobs:
               assert len(data['a']) == 8
               assert 'pc' in data and 'sr' in data
 
-          changing = False
-          keys = ('pc', 'sr')
           first = snaps[0]['data']
-          for s in snaps[1:]:
-              data = s['data']
-              if any(data[k] != first[k] for k in keys) or data['d'] != first['d'] or data['a'] != first['a']:
-                  changing = True
-                  break
+          changing = any(
+              any(s['data'][k] != first[k] for k in ('pc', 'sr'))
+              or s['data']['d'] != first['d']
+              or s['data']['a'] != first['a']
+              for s in snaps[1:]
+          )
           assert changing, 'CPU state did not change across samples'
           print(f'PASS: {len(snaps)} live CPU snapshots; CPU state changed')
           PY
 
-          # Ask Amiberry to exit cleanly so M1 writes session.stop.
+          # M1.2: watch one disposable Chip RAM location, mutate it once through
+          # Amiberry's existing WRITE_MEM test/control command, then restore it.
+          WATCH_ADDRESS=0x7fff0
+          export WATCH_ADDRESS
+          python3 tools/amisandbox_memory_watch.py \
+            --socket "$IPC_SOCKET" \
+            --address "$WATCH_ADDRESS" \
+            --width 4 \
+            --count 30 \
+            --interval-ms 100 &
+          WATCH_PID=$!
+
+          # Give the watcher time to complete IPC readiness and baseline capture.
+          sleep 1
+
+          python3 - <<'PY'
+          import os
+          import socket
+
+          sock = os.environ['IPC_SOCKET']
+          addr = os.environ['WATCH_ADDRESS']
+
+          def command(text):
+              s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+              s.settimeout(2)
+              s.connect(sock)
+              s.sendall((text + '\n').encode('ascii'))
+              data = b''
+              while b'\n' not in data:
+                  chunk = s.recv(4096)
+                  if not chunk:
+                      break
+                  data += chunk
+              s.close()
+              line = data.decode().splitlines()[0]
+              fields = line.split('\t')
+              assert fields[0] == 'OK', line
+              return fields[1:]
+
+          old = int(command(f'READ_MEM {addr} 4')[0], 0)
+          new = old ^ 0x00000001
+          command(f'WRITE_MEM {addr} 4 {new}')
+          with open('/tmp/amisandbox-m1_1/m1_2_test_values.txt', 'w', encoding='utf-8') as f:
+              f.write(f'{addr} {old} {new}\n')
+          print(f'M1.2 mutation: {addr} {old:#010x} -> {new:#010x}')
+          PY
+
+          wait "$WATCH_PID"
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/amisandbox-m1_1')
+          addr_text, old_text, new_text = (root / 'm1_2_test_values.txt').read_text().split()
+          old = int(old_text)
+          new = int(new_text)
+          changes = [json.loads(line) for line in (root / 'memory-changes.jsonl').read_text().splitlines() if line.strip()]
+          matching = [e for e in changes if e['data']['address'] == f"0x{int(addr_text, 0):08x}" and int(e['data']['old_value'], 16) == old and int(e['data']['new_value'], 16) == new]
+          assert len(matching) == 1, matching
+          event = matching[0]
+          assert event['type'] == 'memory.change'
+          assert event['data']['width'] == 4
+          print('PASS: M1.2 observed exactly one controlled memory.change event')
+          PY
+
+          python3 - <<'PY'
+          import os
+          import socket
+          from pathlib import Path
+
+          sock = os.environ['IPC_SOCKET']
+          addr_text, old_text, _ = Path('/tmp/amisandbox-m1_1/m1_2_test_values.txt').read_text().split()
+          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          s.settimeout(2)
+          s.connect(sock)
+          s.sendall(f'WRITE_MEM {addr_text} 4 {old_text}\n'.encode('ascii'))
+          response = s.recv(4096).decode(errors='replace').strip()
+          s.close()
+          assert response.startswith('OK'), response
+          print('PASS: M1.2 controlled mutation restored')
+          PY
+
           python3 - <<'PY'
           import os
           import socket
@@ -247,7 +329,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: amisandbox-m1-m1_1-runtime-evidence
+          name: amisandbox-m1-m1_2-runtime-evidence
           path: |
             /tmp/amisandbox-m1_1/
             /tmp/amisandbox-amiberry.log

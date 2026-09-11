@@ -26,6 +26,8 @@ Each snapshot records:
 
 M1.1 deliberately does not append to the emulator-owned `events.jsonl`. Keeping the sampler stream separate avoids concurrent writers and lets later milestones merge streams deterministically.
 
+The sampler also performs an IPC readiness probe before the first CPU request. This avoids treating socket creation alone as proof that Amiberry's event loop is ready to service IPC commands.
+
 ## Build
 
 For the first qualification, use a non-JIT build with IPC enabled:
@@ -47,7 +49,7 @@ python3 tools/check_amisandbox_m1_1.py
 
 Both must report `PASS`.
 
-## Runtime qualification
+## Runtime usage
 
 Create a disposable output directory and launch AmiSandbox with a known analysis profile:
 
@@ -75,20 +77,6 @@ export AMISANDBOX_ANALYSIS_DIR=/tmp/amisandbox-m1_1
 python3 tools/amisandbox_cpu_sampler.py --count 10 --interval-ms 100
 ```
 
-For an alternate Amiberry instance:
-
-```bash
-python3 tools/amisandbox_cpu_sampler.py --instance 1 --count 10
-```
-
-An explicit socket can also be supplied:
-
-```bash
-python3 tools/amisandbox_cpu_sampler.py \
-  --socket /tmp/amiberry.sock \
-  --count 10
-```
-
 ## Required evidence
 
 Qualification passes when all of the following are true:
@@ -103,13 +91,17 @@ Qualification passes when all of the following are true:
 8. Stopping the sampler does not stop or destabilize emulation.
 9. Running without `AMISANDBOX_ANALYSIS_DIR` leaves normal Amiberry behavior unchanged.
 
-Useful validation:
+## Qualification evidence
 
-```bash
-wc -l /tmp/amisandbox-m1_1/cpu-snapshots.jsonl
-python3 -m json.tool /tmp/amisandbox-m1_1/session.json
-head -n 1 /tmp/amisandbox-m1_1/cpu-snapshots.jsonl | python3 -m json.tool
-```
+GitHub Actions runtime qualification passed on the `master` branch:
+
+- workflow: `AmiSandbox Runtime Qualification`
+- run: `34658255305`
+- qualified commit: `61b75ba1d87831691c5ce5e32b8e9744959af475`
+- job: `runtime-qual-m1-m1_1`
+- conclusion: `success`
+
+The workflow verified all nine criteria above, including live CPU-state changes and a separate no-analysis normal-mode smoke test. Qualification evidence was uploaded as `amisandbox-m1-m1_1-runtime-evidence`.
 
 ## Security and determinism notes
 
@@ -121,6 +113,6 @@ head -n 1 /tmp/amisandbox-m1_1/cpu-snapshots.jsonl | python3 -m json.tool
 
 ## Status
 
-**IMPLEMENTED — runtime qualification pending.**
+**PASS — M1.1 is runtime-qualified.**
 
 A later milestone may add an inline interpreter hook if IPC sampling proves too coarse for a particular malware-analysis workload. That decision should be evidence-driven because directly patching hot CPU execution paths increases upstream divergence and performance risk.

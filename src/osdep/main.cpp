@@ -29,6 +29,7 @@ int main(int argc, char* argv[])
 	const bool analysis_mode = output_dir && *output_dir;
 	std::vector<char*> effective_argv(argv, argv + argc);
 	std::string bsdsocket_override;
+	std::string storage_override;
 
 	if (analysis_mode) {
 #ifdef JIT
@@ -49,8 +50,17 @@ int main(int argc, char* argv[])
 		effective_argv.insert(effective_argv.begin() + 1, bsdsocket_override.data());
 		std::fputs("AmiSandbox: forcing bsdsocket_emu=false in analysis mode\n", stderr);
 
+		// M2.2 isolation rule: host-backed directory filesystems and hardfiles
+		// must not be writable by malware-analysis guests. Amiberry exposes the
+		// global harddrive_write_protect preference as harddrive_read_only in
+		// uae_prefs. Use the same authoritative cfgparam precedence rule as M2.1b
+		// so a hostile config/CLI request cannot silently re-enable writes.
+		storage_override = "-cfgparam=harddrive_write_protect=true";
+		effective_argv.insert(effective_argv.begin() + 1, storage_override.data());
+		std::fputs("AmiSandbox: forcing harddrive_write_protect=true in analysis mode\n", stderr);
+
 		amisandbox::SessionMetadata metadata;
-		metadata.amisandbox_version = "m2.1";
+		metadata.amisandbox_version = "m2.2";
 #ifdef AMIBERRY_VERSION
 		metadata.emulator_version = AMIBERRY_VERSION;
 #else

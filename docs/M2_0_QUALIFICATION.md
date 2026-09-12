@@ -1,6 +1,6 @@
 # AmiSandbox M2.0 Qualification
 
-Status: **IMPLEMENTED — runtime qualification pending**
+Status: **QUALIFIED — PASS**
 
 ## Scope
 
@@ -12,7 +12,7 @@ This converts the earlier `jit_enabled=false` metadata assumption into an enforc
 
 ## Implementation
 
-`src/osdep/main.cpp` now checks the compile-time `JIT` configuration before starting an analysis session:
+`src/osdep/main.cpp` checks the compile-time `JIT` configuration before starting an analysis session:
 
 - analysis mode + JIT build: exit code `78`
 - analysis mode + non-JIT build: allowed to continue
@@ -34,15 +34,25 @@ Expected:
 PASS: AmiSandbox M2.0 fail-closed JIT isolation contract
 ```
 
-## Runtime qualification criteria
+## Runtime qualification
 
-M2.0 is qualified when CI demonstrates all of the following:
+GitHub Actions qualification passed:
 
-1. Existing M1/M1.1/M1.2 qualification remains green in a `USE_JIT=OFF` analysis build.
-2. The non-JIT build creates a normal analysis session and records `jit_enabled=false`.
-3. A JIT-enabled build started with `AMISANDBOX_ANALYSIS_DIR` exits with code `78` before emulator execution.
-4. The rejected JIT analysis launch does not create `session.json` or `events.jsonl`.
-5. Normal Amiberry mode remains launchable independently of the analysis-mode guard.
+- workflow: `AmiSandbox M2 Isolation Qualification`
+- run: `34671936080`
+- job: `103494800457`
+- qualified head: `fb0248dcd041d503e2dc2343e1baec9608860f27`
+- conclusion: **SUCCESS**
+
+The run demonstrated:
+
+1. Static M2.0 contract check PASS.
+2. A `USE_JIT=ON` qualification binary built successfully.
+3. Analysis mode rejected the JIT-enabled binary with exit code `78`.
+4. Rejected analysis startup created neither `session.json` nor `events.jsonl`.
+5. The same JIT-enabled binary remained launchable in normal Amiberry mode.
+6. Normal-mode IPC readiness was proven with `GET_VERSION` before a clean `QUIT`, avoiding the socket-created-before-event-loop-ready race.
+7. Qualification evidence upload PASS.
 
 ## Security note
 

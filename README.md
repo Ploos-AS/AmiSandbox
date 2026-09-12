@@ -20,7 +20,8 @@ Current milestone state:
 - **M1.2 — qualified:** first memory-observation slice using read-only IPC polling and versioned `memory.change` JSONL events.
 - **M2.0 — qualified:** analysis mode fails closed for JIT-enabled builds while normal Amiberry mode remains unaffected.
 - **M2.1 — qualified:** guest Ethernet backends are blocked in analysis mode and direct `bsdsocket.library` emulation is authoritatively forced off, while normal Amiberry mode remains unaffected.
-- **M2.2 — next:** enforce no writable host-filesystem exposure by default in analysis mode.
+- **M2.2 — qualified:** host-backed hard drives and directory filesystems are forced read-only in analysis mode, including hostile writable mount requests, while normal Amiberry mode remains unaffected.
+- **M2.2.1 — next:** add a deterministic guest-side write-attempt witness to strengthen the host-filesystem isolation evidence.
 
 M1/M1.1 runtime qualification passed in GitHub Actions run `34658255305` at commit `61b75ba1d87831691c5ce5e32b8e9744959af475`.
 
@@ -30,6 +31,8 @@ M2.0 JIT-isolation qualification passed in GitHub Actions run `34671936080` (job
 
 M2.1 network-isolation qualification passed in GitHub Actions run `34700520843` (job `103571342139`) at commit `7f92ef2ed711f2fe0a62d866db598926c4c4a0fc`.
 
+M2.2 host-filesystem-isolation qualification passed in GitHub Actions run `34702386265` (job `103576333288`) at commit `d7ce25773741ae24ab312371e4bd73501bfb0b4e`.
+
 See:
 
 - [`docs/AMISANDBOX_M0.md`](docs/AMISANDBOX_M0.md)
@@ -38,6 +41,7 @@ See:
 - [`docs/M1_2_QUALIFICATION.md`](docs/M1_2_QUALIFICATION.md)
 - [`docs/M2_0_QUALIFICATION.md`](docs/M2_0_QUALIFICATION.md)
 - [`docs/M2_1_QUALIFICATION.md`](docs/M2_1_QUALIFICATION.md)
+- [`docs/M2_2_QUALIFICATION.md`](docs/M2_2_QUALIFICATION.md)
 
 ## Goals
 

@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ethernet = (ROOT / "src" / "ethernet.cpp").read_text(encoding="utf-8")
 options = (ROOT / "src" / "include" / "options.h").read_text(encoding="utf-8")
+wrapper = (ROOT / "src" / "osdep" / "main.cpp").read_text(encoding="utf-8")
+cfgfile = (ROOT / "src" / "cfgfile.cpp").read_text(encoding="utf-8")
 
 required_ethernet = [
     'AMISANDBOX_ANALYSIS_DIR',
@@ -31,5 +33,32 @@ switch_pos = ethernet.find('switch (ndd->type)', open_pos)
 if min(open_pos, guard_pos, switch_pos) < 0 or not (open_pos < guard_pos < switch_pos):
     raise SystemExit('FAIL: analysis guard must run before any Ethernet backend switch/open')
 
-print('PASS: AmiSandbox M2.1a guest Ethernet fail-closed contract')
-print('NOTE: direct bsdsocket.library emulation remains M2.1b and M2.1 is not yet qualified')
+required_bsdsocket = [
+    'const bool analysis_mode = output_dir && *output_dir;',
+    'if (analysis_mode)',
+    '-cfgparam=bsdsocket_emu=false',
+    'effective_argv.push_back(bsdsocket_override.data())',
+    'AmiSandbox: forcing bsdsocket_emu=false in analysis mode',
+    'metadata.amisandbox_version = "m2.1"',
+    'metadata.external_networking_enabled = false',
+    'amiberry_main(static_cast<int>(effective_argv.size()), effective_argv.data())',
+]
+for token in required_bsdsocket:
+    if token not in wrapper:
+        raise SystemExit(f"FAIL: bsdsocket isolation token missing: {token}")
+
+if '_T("bsdsocket_emu"), &p->socket_emu' not in cfgfile:
+    raise SystemExit('FAIL: Amiberry no longer maps bsdsocket_emu to socket_emu')
+
+analysis_pos = wrapper.find('if (analysis_mode)')
+override_pos = wrapper.find('-cfgparam=bsdsocket_emu=false')
+start_pos = wrapper.find('analysis.start(', analysis_pos)
+emulator_pos = wrapper.find('amiberry_main(', start_pos)
+if min(analysis_pos, override_pos, start_pos, emulator_pos) < 0 or not (
+    analysis_pos < override_pos < start_pos < emulator_pos
+):
+    raise SystemExit('FAIL: bsdsocket override must be established in analysis mode before session/emulator start')
+
+print('PASS: AmiSandbox M2.1 guest network fail-closed contract')
+print('  Ethernet: SLIRP/TAP/PCAP blocked at ethernet_open')
+print('  bsdsocket.library: bsdsocket_emu=false forced for analysis launches')

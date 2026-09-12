@@ -32,7 +32,9 @@ required_launch = [
 required_media = [
     'copy_strategy": "full-copy"',
     'source evidence changed during analysis',
-    '"mutated": working_final != initial',
+    'working_final = sha256_file(working)',
+    'initial = manifest["working"]["sha256_initial"]',
+    'manifest["working"]["mutated"] = working_final != initial',
 ]
 
 missing = []

@@ -8,6 +8,7 @@ on:
       - 'src/ethernet.cpp'
       - 'src/osdep/main.cpp'
       - 'src/cfgfile.cpp'
+      - 'tools/check_amisandbox_m2_0.py'
       - 'tools/check_amisandbox_m2_1.py'
       - 'docs/M2_1_QUALIFICATION.md'
       - '.github/workflows/amisandbox-m2_1-qual.yml'

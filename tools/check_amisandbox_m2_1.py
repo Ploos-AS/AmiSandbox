@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 ethernet = (ROOT / "src" / "ethernet.cpp").read_text(encoding="utf-8")
@@ -38,13 +39,19 @@ required_bsdsocket = [
     '-cfgparam=bsdsocket_emu=false',
     'effective_argv.insert(effective_argv.begin() + 1, bsdsocket_override.data())',
     'AmiSandbox: forcing bsdsocket_emu=false in analysis mode',
-    'metadata.amisandbox_version = "m2.1"',
     'metadata.external_networking_enabled = false',
     'amiberry_main(static_cast<int>(effective_argv.size()), effective_argv.data())',
 ]
 for token in required_bsdsocket:
     if token not in wrapper:
         raise SystemExit(f"FAIL: bsdsocket isolation token missing: {token}")
+
+version_match = re.search(r'metadata\.amisandbox_version = "m(\d+)\.(\d+)"', wrapper)
+if not version_match:
+    raise SystemExit('FAIL: AmiSandbox milestone metadata missing')
+major, minor = map(int, version_match.groups())
+if (major, minor) < (2, 1):
+    raise SystemExit(f'FAIL: M2.1 contract regressed to m{major}.{minor}')
 
 for token in (
     '_T("bsdsocket_emu"), &p->socket_emu',

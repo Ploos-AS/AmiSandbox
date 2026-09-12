@@ -1,6 +1,7 @@
 #include "sysdeps.h"
 #include <SDL3/SDL_main.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
@@ -26,7 +27,16 @@ int main(int argc, char* argv[])
 	const char* output_dir = std::getenv("AMISANDBOX_ANALYSIS_DIR");
 
 	if (output_dir && *output_dir) {
+#ifdef JIT
+		// M2.0 isolation rule: malware-analysis sessions must never run in a
+		// JIT-enabled binary. Fail closed before creating session artifacts or
+		// entering the emulator. Normal Amiberry operation remains unaffected.
+		std::fputs("AmiSandbox: analysis mode requires a non-JIT build\n", stderr);
+		return 78;
+#endif
+
 		amisandbox::SessionMetadata metadata;
+		metadata.amisandbox_version = "m2.0";
 #ifdef AMIBERRY_VERSION
 		metadata.emulator_version = AMIBERRY_VERSION;
 #else

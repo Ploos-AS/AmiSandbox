@@ -1,0 +1,269 @@
+name: AmiSandbox M2.2 Host Filesystem Isolation Qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'src/osdep/main.cpp'
+      - 'src/cfgfile.cpp'
+      - 'src/filesys.cpp'
+      - 'src/include/options.h'
+      - 'tools/check_amisandbox_m2_0.py'
+      - 'tools/check_amisandbox_m2_1.py'
+      - 'tools/check_amisandbox_m2_2.py'
+      - 'docs/M2_2_QUALIFICATION.md'
+      - '.github/workflows/amisandbox-m2_2-qual.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+
+permissions:
+  contents: read
+
+jobs:
+  qualify-m2_2-host-storage-fail-closed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install build and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build xvfb xauth \
+            libflac-dev libmpeg2-4-dev libpng-dev libasound2-dev \
+            libmpg123-dev libportmidi-dev libserialport-dev libenet-dev \
+            libpcap-dev libzstd-dev libcurl4-openssl-dev nlohmann-json3-dev
+
+      - name: Install SDL3 and SDL3_image
+        id: sdl
+        uses: libsdl-org/setup-sdl@main
+        with:
+          install-linux-dependencies: true
+          version: 3.2.8
+          version-sdl-image: 3.2.4
+          pre-release: false
+
+      - name: Static M1 through M2.2 contract checks
+        run: |
+          python3 tools/check_amisandbox_m1.py
+          python3 tools/check_amisandbox_m1_1.py
+          python3 tools/check_amisandbox_m1_2.py
+          python3 tools/check_amisandbox_m2_0.py
+          python3 tools/check_amisandbox_m2_1.py
+          python3 tools/check_amisandbox_m2_2.py
+
+      - name: Build non-JIT analysis binary
+        run: |
+          cmake -S . -B build-m2_2 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH='${{ steps.sdl.outputs.prefix }}' \
+            -DUSE_JIT=OFF \
+            -DUSE_IPC_SOCKET=ON \
+            -DUSE_PPC=OFF \
+            -DUSE_QEMU_PPC=OFF
+          cmake --build build-m2_2 -j"$(nproc)"
+
+      - name: Analysis mode prevents persistence to hostile rw host mount
+        shell: bash
+        env:
+          AMISANDBOX_ANALYSIS_DIR: /tmp/amisandbox-m2_2-analysis
+          AMISANDBOX_MACHINE_PROFILE: a500-aros-ci
+          AMISANDBOX_CONFIG_FINGERPRINT: github-actions-m2_2-host-storage-negative
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          HOST_ROOT=/tmp/amisandbox-m2_2-host
+          EVIDENCE=/tmp/amisandbox-m2_2-evidence
+          rm -rf "$AMISANDBOX_ANALYSIS_DIR" "$HOST_ROOT" "$EVIDENCE"
+          mkdir -p "$AMISANDBOX_ANALYSIS_DIR" "$HOST_ROOT/S" "$EVIDENCE"
+
+          printf 'M2.2 baseline\n' > "$HOST_ROOT/baseline.txt"
+          BASELINE_SHA=$(sha256sum "$HOST_ROOT/baseline.txt" | awk '{print $1}')
+          export HOST_ROOT BASELINE_SHA
+
+          cat > "$HOST_ROOT/S/Startup-Sequence" <<'EOF'
+          Echo "M2.2 guest write attempt"
+          Echo "M2.2 mutation" >DH0:guest-write-marker.txt
+          EOF
+          STARTUP_SHA=$(sha256sum "$HOST_ROOT/S/Startup-Sequence" | awk '{print $1}')
+          export STARTUP_SHA
+
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          export IPC_SOCKET
+          rm -f "$IPC_SOCKET"
+
+          xvfb-run -a ./build-m2_2/amiberry \
+            -cfgparam=harddrive_write_protect=false \
+            "-cfgparam=filesystem2=rw,DH0:M2_2:${HOST_ROOT},0" \
+            --model A500 -G -S 0 --log \
+            > "$EVIDENCE/analysis-storage.log" 2>&1 &
+          AMIBERRY_PID=$!
+
+          cleanup() {
+            if kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              kill "$AMIBERRY_PID" || true
+              wait "$AMIBERRY_PID" || true
+            fi
+            rm -f "$IPC_SOCKET"
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 60); do
+            if [ -S "$IPC_SOCKET" ]; then break; fi
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              cat "$EVIDENCE/analysis-storage.log"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test -S "$IPC_SOCKET"
+
+          grep -F 'AmiSandbox: forcing harddrive_write_protect=true in analysis mode' \
+            "$EVIDENCE/analysis-storage.log"
+
+          # Allow the AROS fallback/DOS startup path time to discover the host-backed
+          # volume and execute its Startup-Sequence if bootable in this CI profile.
+          sleep 5
+
+          python3 - <<'PY'
+          import json, os, socket, time
+          from pathlib import Path
+
+          root = Path(os.environ['HOST_ROOT'])
+          analysis = Path(os.environ['AMISANDBOX_ANALYSIS_DIR'])
+          log = Path('/tmp/amisandbox-m2_2-evidence/analysis-storage.log').read_text(errors='replace')
+
+          meta = json.loads((analysis / 'session.json').read_text())
+          assert meta['amisandbox_version'] == 'm2.2', meta
+          assert meta['jit_enabled'] is False, meta
+          assert meta['external_networking_enabled'] is False, meta
+
+          assert str(root) in log, 'host-backed test mount path never appeared in emulator log'
+          assert not (root / 'guest-write-marker.txt').exists(), 'guest write persisted to host-backed volume'
+
+          import hashlib
+          baseline_sha = hashlib.sha256((root / 'baseline.txt').read_bytes()).hexdigest()
+          startup_sha = hashlib.sha256((root / 'S' / 'Startup-Sequence').read_bytes()).hexdigest()
+          assert baseline_sha == os.environ['BASELINE_SHA'], (baseline_sha, os.environ['BASELINE_SHA'])
+          assert startup_sha == os.environ['STARTUP_SHA'], (startup_sha, os.environ['STARTUP_SHA'])
+          print('PASS: hostile rw host mount remained unchanged under M2.2 analysis policy')
+
+          path = os.environ['IPC_SOCKET']
+          deadline = time.monotonic() + 15
+          while True:
+              try:
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                      s.settimeout(1)
+                      s.connect(path)
+                      s.sendall(b'GET_VERSION\n')
+                      response = s.recv(4096).decode(errors='replace').strip()
+                  if response.startswith('OK'):
+                      break
+              except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+                  pass
+              if time.monotonic() >= deadline:
+                  raise SystemExit('IPC did not become ready')
+              time.sleep(.1)
+          with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+              s.settimeout(2)
+              s.connect(path)
+              s.sendall(b'QUIT\n')
+              response = s.recv(4096).decode(errors='replace').strip()
+          assert response.startswith('OK'), response
+          PY
+
+          wait "$AMIBERRY_PID"
+          trap - EXIT
+          rm -f "$IPC_SOCKET"
+
+          test ! -e "$HOST_ROOT/guest-write-marker.txt"
+          test "$(sha256sum "$HOST_ROOT/baseline.txt" | awk '{print $1}')" = "$BASELINE_SHA"
+          test "$(sha256sum "$HOST_ROOT/S/Startup-Sequence" | awk '{print $1}')" = "$STARTUP_SHA"
+          echo 'PASS: M2.2 analysis run left host backing object unchanged'
+
+      - name: Normal mode remains unaffected
+        shell: bash
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          unset AMISANDBOX_ANALYSIS_DIR AMISANDBOX_MACHINE_PROFILE AMISANDBOX_CONFIG_FINGERPRINT
+          EVIDENCE=/tmp/amisandbox-m2_2-evidence
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          export IPC_SOCKET
+          rm -f "$IPC_SOCKET"
+
+          xvfb-run -a ./build-m2_2/amiberry \
+            -cfgparam=harddrive_write_protect=false \
+            --model A500 -G -S 0 --log \
+            > "$EVIDENCE/normal-storage.log" 2>&1 &
+          AMIBERRY_PID=$!
+
+          cleanup() {
+            if kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              kill "$AMIBERRY_PID" || true
+              wait "$AMIBERRY_PID" || true
+            fi
+            rm -f "$IPC_SOCKET"
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 60); do
+            if [ -S "$IPC_SOCKET" ]; then break; fi
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              cat "$EVIDENCE/normal-storage.log"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test -S "$IPC_SOCKET"
+          ! grep -F 'AmiSandbox: forcing harddrive_write_protect=true in analysis mode' "$EVIDENCE/normal-storage.log"
+
+          python3 - <<'PY'
+          import os, socket, time
+          path = os.environ['IPC_SOCKET']
+          deadline = time.monotonic() + 15
+          while True:
+              try:
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                      s.settimeout(1)
+                      s.connect(path)
+                      s.sendall(b'GET_VERSION\n')
+                      response = s.recv(4096).decode(errors='replace').strip()
+                  if response.startswith('OK'):
+                      break
+              except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+                  pass
+              if time.monotonic() >= deadline:
+                  raise SystemExit('IPC did not become ready')
+              time.sleep(.1)
+          with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+              s.settimeout(2)
+              s.connect(path)
+              s.sendall(b'QUIT\n')
+              response = s.recv(4096).decode(errors='replace').strip()
+          assert response.startswith('OK'), response
+          print('PASS: normal mode remains unaffected by M2.2 analysis-only override')
+          PY
+
+          wait "$AMIBERRY_PID"
+          trap - EXIT
+          rm -f "$IPC_SOCKET"
+
+      - name: Upload M2.2 qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: amisandbox-m2_2-host-storage-isolation-evidence
+          path: |
+            /tmp/amisandbox-m2_2-evidence/
+            /tmp/amisandbox-m2_2-analysis/
+            /tmp/amisandbox-m2_2-host/
+          if-no-files-found: warn
+          retention-days: 14

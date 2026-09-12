@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -74,6 +75,17 @@ def main() -> int:
         "-cfgparam=floppy_write_protect=false",
         *forwarded,
     ]
+
+    # Amiberry still requires an X display even for non-interactive analysis
+    # launches. On headless CI/appliance hosts, transparently use xvfb-run when
+    # it is installed. A real DISPLAY always wins and normal desktop launches
+    # remain unchanged.
+    if not env.get("DISPLAY"):
+        xvfb_run = shutil.which("xvfb-run")
+        if xvfb_run:
+            command = [xvfb_run, "-a", *command]
+            print("AmiSandbox M2.5 display: xvfb-run headless fallback", file=sys.stderr, flush=True)
+
     print(f"AmiSandbox M2.5 working media: {working}", file=sys.stderr, flush=True)
 
     result = 70

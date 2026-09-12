@@ -1,6 +1,6 @@
 # AmiSandbox M2.2 Qualification — Host Filesystem Isolation
 
-Status: **IMPLEMENTED — runtime qualification pending**
+Status: **QUALIFIED — PASS**
 
 ## Goal
 
@@ -27,7 +27,7 @@ Floppy/media-specific write protection and analysis-output directories are separ
 3. Session metadata is not emitted as M2.2 until the override has been established.
 4. Normal Amiberry mode remains unchanged.
 5. M1 through M2.1 contracts remain green.
-6. Runtime qualification must exercise at least one writable host-backed directory or hardfile request and prove the guest cannot persist a write to the backing host object.
+6. Runtime qualification exercises a writable host-backed directory request and proves the backing host object remains unchanged.
 
 ## Static qualification
 
@@ -43,17 +43,54 @@ Expected:
 PASS: AmiSandbox M2.2 host-backed drive read-only contract
 ```
 
-## Runtime qualification target
+## Runtime qualification
 
-The dedicated M2.2 workflow must:
+GitHub Actions workflow:
 
-1. build a non-JIT analysis binary;
-2. launch analysis mode with a deliberately hostile `harddrive_write_protect=false` request;
-3. confirm the M2.2 override is active before guest execution;
-4. mount a disposable host-backed test object requested as writable;
-5. attempt a deterministic guest-side write;
-6. prove the backing host object is unchanged;
-7. launch the same build outside analysis mode and prove the analysis-only override is absent;
-8. upload logs and test artifacts.
+```text
+.github/workflows/amisandbox-m2_2-qual.yml
+```
 
-Until the guest-side persistence test passes, M2.2 remains **implemented, not qualified**.
+Qualified in:
+
+- Run: `34702386265`
+- Job: `103576333288`
+- Head: `d7ce25773741ae24ab312371e4bd73501bfb0b4e`
+- Evidence artifact: `10300945496`
+- Evidence artifact SHA-256: `46bf10f6bfb4bc520ef07e9dc4495e45b6e55ff38cc2cd684950beb21e09a69a`
+
+The successful qualification run proved:
+
+1. M1 through M2.2 static contracts pass.
+2. The non-JIT analysis build completes successfully (`499/499`).
+3. Analysis mode was deliberately launched with `harddrive_write_protect=false`.
+4. A disposable host directory was deliberately requested through `filesystem2=rw,...`.
+5. AmiSandbox logged `AmiSandbox: forcing harddrive_write_protect=true in analysis mode`.
+6. The configured host-backed path appeared in the emulator log, proving the hostile mount request was processed by the emulator configuration.
+7. No `guest-write-marker.txt` persisted in the backing host directory.
+8. Pre-recorded SHA-256 hashes for the baseline file and test `S/Startup-Sequence` remained unchanged after the analysis run.
+9. Session metadata reported `amisandbox_version=m2.2`, JIT disabled, and external networking disabled.
+10. The same binary started normally outside analysis mode without the M2.2 override diagnostic and accepted a clean IPC `QUIT`.
+11. Qualification evidence was uploaded successfully.
+
+Representative runtime output:
+
+```text
+PASS: AmiSandbox M2.2 host-backed drive read-only contract
+AmiSandbox: forcing harddrive_write_protect=true in analysis mode
+PASS: hostile rw host mount remained unchanged under M2.2 analysis policy
+PASS: M2.2 analysis run left host backing object unchanged
+PASS: normal mode remains unaffected by M2.2 analysis-only override
+```
+
+## Qualification boundary
+
+This qualification proves the fail-closed host-backed-drive policy and verifies that the backing object remains unchanged despite a hostile writable mount request.
+
+The CI profile does not independently provide a deterministic witness that the guest actually reached and executed the `Echo >DH0:` statement in the disposable `S/Startup-Sequence`. Therefore M2.2 does **not** claim that specific guest instruction execution as independently observed evidence.
+
+A follow-up hardening slice, **M2.2.1**, should add a deterministic guest-side write-attempt witness while retaining the host-side immutability checks.
+
+## Verdict
+
+**PASS — M2.2 host-filesystem isolation is runtime-qualified.**

@@ -1,0 +1,100 @@
+name: AmiSandbox M2.4 Disposable Working Media Qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'tools/amisandbox_media_prepare.py'
+      - 'tools/check_amisandbox_m2_4.py'
+      - 'docs/M2_4_QUALIFICATION.md'
+      - '.github/workflows/amisandbox-m2_4-qual.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  qualify-m2_4-disposable-working-media:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Static M1 through M2.4 contract checks
+        run: |
+          python3 tools/check_amisandbox_m1.py
+          python3 tools/check_amisandbox_m1_1.py
+          python3 tools/check_amisandbox_m1_2.py
+          python3 tools/check_amisandbox_m2_0.py
+          python3 tools/check_amisandbox_m2_1.py
+          python3 tools/check_amisandbox_m2_2.py
+          python3 tools/check_amisandbox_m2_3.py
+          python3 tools/check_amisandbox_m2_4.py
+
+      - name: Working copy mutates while original stays immutable
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/tmp/amisandbox-m2_4-mutated
+          ANALYSIS="$ROOT/analysis"
+          ORIGINAL="$ROOT/original.adf"
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          truncate -s 901120 "$ORIGINAL"
+          printf 'AMISANDBOX-M2.4-ORIGINAL' | dd of="$ORIGINAL" bs=1 seek=1024 conv=notrunc status=none
+          ORIGINAL_BEFORE=$(sha256sum "$ORIGINAL" | awk '{print $1}')
+
+          WORKING=$(python3 tools/amisandbox_media_prepare.py prepare "$ORIGINAL" --analysis-dir "$ANALYSIS")
+          test -f "$WORKING"
+          test "$(sha256sum "$WORKING" | awk '{print $1}')" = "$ORIGINAL_BEFORE"
+
+          printf 'CONTROLLED-MALWARE-WRITE' | dd of="$WORKING" bs=1 seek=4096 conv=notrunc status=none
+          test "$(sha256sum "$WORKING" | awk '{print $1}')" != "$ORIGINAL_BEFORE"
+          test "$(sha256sum "$ORIGINAL" | awk '{print $1}')" = "$ORIGINAL_BEFORE"
+
+          test "$(python3 tools/amisandbox_media_prepare.py finalize --analysis-dir "$ANALYSIS")" = 'mutated=true'
+
+          python3 - "$ANALYSIS/media/media-manifest.json" "$ORIGINAL_BEFORE" <<'PY'
+          import json, sys
+          from pathlib import Path
+          manifest = json.loads(Path(sys.argv[1]).read_text())
+          original_before = sys.argv[2]
+          assert manifest['amisandbox_milestone'] == 'm2.4', manifest
+          assert manifest['copy_strategy'] == 'full-copy', manifest
+          assert manifest['source_immutable_expected'] is True, manifest
+          assert manifest['source']['sha256'] == original_before, manifest
+          assert manifest['source']['sha256_final'] == original_before, manifest
+          assert manifest['working']['sha256_initial'] == original_before, manifest
+          assert manifest['working']['sha256_final'] != original_before, manifest
+          assert manifest['working']['mutated'] is True, manifest
+          print('PASS: working copy mutated while original remained immutable')
+          PY
+
+      - name: Unchanged working copy reports no mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/tmp/amisandbox-m2_4-clean
+          ANALYSIS="$ROOT/analysis"
+          ORIGINAL="$ROOT/original.adf"
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          truncate -s 901120 "$ORIGINAL"
+          printf 'AMISANDBOX-M2.4-CLEAN' | dd of="$ORIGINAL" bs=1 seek=2048 conv=notrunc status=none
+          ORIGINAL_SHA=$(sha256sum "$ORIGINAL" | awk '{print $1}')
+          python3 tools/amisandbox_media_prepare.py prepare "$ORIGINAL" --analysis-dir "$ANALYSIS" >/dev/null
+          test "$(python3 tools/amisandbox_media_prepare.py finalize --analysis-dir "$ANALYSIS")" = 'mutated=false'
+          test "$(sha256sum "$ORIGINAL" | awk '{print $1}')" = "$ORIGINAL_SHA"
+
+      - name: Upload M2.4 qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: amisandbox-m2_4-disposable-working-media-evidence
+          path: |
+            /tmp/amisandbox-m2_4-mutated/
+            /tmp/amisandbox-m2_4-clean/
+          if-no-files-found: warn
+          retention-days: 14

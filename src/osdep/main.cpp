@@ -41,11 +41,12 @@ int main(int argc, char* argv[])
 
 		// M2.1b isolation rule: direct bsdsocket.library emulation is an
 		// independent guest-to-host network path. cfgfile parameters are applied
-		// after the loaded configuration, so append a mandatory final override
-		// before entering Amiberry. M2.1a separately blocks Ethernet backends at
-		// ethernet_open(). Normal Amiberry launches do not receive this override.
+		// after the loaded configuration. cfgfile_addcfgparam() prepends entries,
+		// so inserting this argument first makes it the last cfgparam applied and
+		// therefore authoritative even if the caller requested bsdsocket_emu=true.
+		// M2.1a separately blocks Ethernet backends at ethernet_open().
 		bsdsocket_override = "-cfgparam=bsdsocket_emu=false";
-		effective_argv.push_back(bsdsocket_override.data());
+		effective_argv.insert(effective_argv.begin() + 1, bsdsocket_override.data());
 		std::fputs("AmiSandbox: forcing bsdsocket_emu=false in analysis mode\n", stderr);
 
 		amisandbox::SessionMetadata metadata;

@@ -1,0 +1,229 @@
+name: AmiSandbox M2.1 Network Isolation Qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'src/ethernet.cpp'
+      - 'src/osdep/main.cpp'
+      - 'src/cfgfile.cpp'
+      - 'tools/check_amisandbox_m2_1.py'
+      - 'docs/M2_1_QUALIFICATION.md'
+      - '.github/workflows/amisandbox-m2_1-qual.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+
+permissions:
+  contents: read
+
+jobs:
+  qualify-m2_1-network-fail-closed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install build and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build xvfb xauth \
+            libflac-dev libmpeg2-4-dev libpng-dev libasound2-dev \
+            libmpg123-dev libportmidi-dev libserialport-dev libenet-dev \
+            libpcap-dev libzstd-dev libcurl4-openssl-dev nlohmann-json3-dev
+
+      - name: Install SDL3 and SDL3_image
+        id: sdl
+        uses: libsdl-org/setup-sdl@main
+        with:
+          install-linux-dependencies: true
+          version: 3.2.8
+          version-sdl-image: 3.2.4
+          pre-release: false
+
+      - name: Static M1 through M2.1 contract checks
+        run: |
+          python3 tools/check_amisandbox_m1.py
+          python3 tools/check_amisandbox_m1_1.py
+          python3 tools/check_amisandbox_m1_2.py
+          python3 tools/check_amisandbox_m2_0.py
+          python3 tools/check_amisandbox_m2_1.py
+
+      - name: Build non-JIT analysis binary
+        run: |
+          cmake -S . -B build-m2_1 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH='${{ steps.sdl.outputs.prefix }}' \
+            -DUSE_JIT=OFF \
+            -DUSE_IPC_SOCKET=ON \
+            -DUSE_PPC=OFF \
+            -DUSE_QEMU_PPC=OFF
+          cmake --build build-m2_1 -j"$(nproc)"
+
+      - name: Analysis mode overrides hostile bsdsocket request
+        shell: bash
+        env:
+          AMISANDBOX_ANALYSIS_DIR: /tmp/amisandbox-m2_1-analysis
+          AMISANDBOX_MACHINE_PROFILE: a500-aros-ci
+          AMISANDBOX_CONFIG_FINGERPRINT: github-actions-m2_1-network-negative
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          rm -rf "$AMISANDBOX_ANALYSIS_DIR" /tmp/amisandbox-m2_1-evidence
+          mkdir -p "$AMISANDBOX_ANALYSIS_DIR" /tmp/amisandbox-m2_1-evidence
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          export IPC_SOCKET
+          rm -f "$IPC_SOCKET"
+
+          xvfb-run -a ./build-m2_1/amiberry \
+            -cfgparam=bsdsocket_emu=true \
+            --model A500 -G -S 0 --log \
+            > /tmp/amisandbox-m2_1-evidence/analysis-network.log 2>&1 &
+          AMIBERRY_PID=$!
+
+          cleanup() {
+            if kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              kill "$AMIBERRY_PID" || true
+              wait "$AMIBERRY_PID" || true
+            fi
+            rm -f "$IPC_SOCKET"
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 60); do
+            if [ -S "$IPC_SOCKET" ]; then break; fi
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              cat /tmp/amisandbox-m2_1-evidence/analysis-network.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test -S "$IPC_SOCKET"
+
+          grep -F 'AmiSandbox: forcing bsdsocket_emu=false in analysis mode' \
+            /tmp/amisandbox-m2_1-evidence/analysis-network.log
+          ! grep -F 'bsdsocket.library installed' \
+            /tmp/amisandbox-m2_1-evidence/analysis-network.log
+
+          python3 - <<'PY'
+          import json, os, socket, time
+          analysis = os.environ['AMISANDBOX_ANALYSIS_DIR']
+          with open(os.path.join(analysis, 'session.json'), encoding='utf-8') as f:
+              meta = json.load(f)
+          assert meta['amisandbox_version'] == 'm2.1', meta
+          assert meta['external_networking_enabled'] is False, meta
+          path = os.environ['IPC_SOCKET']
+          deadline = time.monotonic() + 15
+          while True:
+              try:
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                      s.settimeout(1)
+                      s.connect(path)
+                      s.sendall(b'GET_VERSION\n')
+                      response = s.recv(4096).decode(errors='replace').strip()
+                  if response.startswith('OK'):
+                      break
+              except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+                  pass
+              if time.monotonic() >= deadline:
+                  raise SystemExit('IPC did not become ready')
+              time.sleep(.1)
+          with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+              s.settimeout(2)
+              s.connect(path)
+              s.sendall(b'QUIT\n')
+              response = s.recv(4096).decode(errors='replace').strip()
+          assert response.startswith('OK'), response
+          print('PASS: analysis metadata reports M2.1 network isolation and emulator accepts QUIT')
+          PY
+
+          wait "$AMIBERRY_PID"
+          trap - EXIT
+          rm -f "$IPC_SOCKET"
+          echo 'PASS: hostile bsdsocket_emu=true request was overridden in analysis mode'
+
+      - name: Normal mode remains unaffected
+        shell: bash
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          unset AMISANDBOX_ANALYSIS_DIR AMISANDBOX_MACHINE_PROFILE AMISANDBOX_CONFIG_FINGERPRINT
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          export IPC_SOCKET
+          rm -f "$IPC_SOCKET"
+
+          xvfb-run -a ./build-m2_1/amiberry \
+            -cfgparam=bsdsocket_emu=true \
+            --model A500 -G -S 0 --log \
+            > /tmp/amisandbox-m2_1-evidence/normal-network.log 2>&1 &
+          AMIBERRY_PID=$!
+
+          cleanup() {
+            if kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              kill "$AMIBERRY_PID" || true
+              wait "$AMIBERRY_PID" || true
+            fi
+            rm -f "$IPC_SOCKET"
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 60); do
+            if [ -S "$IPC_SOCKET" ]; then break; fi
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              cat /tmp/amisandbox-m2_1-evidence/normal-network.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test -S "$IPC_SOCKET"
+          ! grep -F 'AmiSandbox: forcing bsdsocket_emu=false in analysis mode' \
+            /tmp/amisandbox-m2_1-evidence/normal-network.log
+
+          python3 - <<'PY'
+          import os, socket, time
+          path = os.environ['IPC_SOCKET']
+          deadline = time.monotonic() + 15
+          while True:
+              try:
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                      s.settimeout(1)
+                      s.connect(path)
+                      s.sendall(b'GET_VERSION\n')
+                      response = s.recv(4096).decode(errors='replace').strip()
+                  if response.startswith('OK'):
+                      break
+              except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+                  pass
+              if time.monotonic() >= deadline:
+                  raise SystemExit('IPC did not become ready')
+              time.sleep(.1)
+          with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+              s.settimeout(2)
+              s.connect(path)
+              s.sendall(b'QUIT\n')
+              response = s.recv(4096).decode(errors='replace').strip()
+          assert response.startswith('OK'), response
+          print('PASS: normal mode started and accepted clean QUIT')
+          PY
+
+          wait "$AMIBERRY_PID"
+          trap - EXIT
+          rm -f "$IPC_SOCKET"
+          echo 'PASS: M2.1 analysis-only guard leaves normal mode unchanged'
+
+      - name: Upload M2.1 qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: amisandbox-m2_1-network-isolation-evidence
+          path: |
+            /tmp/amisandbox-m2_1-evidence/
+            /tmp/amisandbox-m2_1-analysis/
+          if-no-files-found: warn
+          retention-days: 14

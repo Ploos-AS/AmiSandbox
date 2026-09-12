@@ -19,13 +19,16 @@ Current milestone state:
 - **M1.1 — qualified:** live 68k D0-D7/A0-A7/PC/SR sampling through Amiberry IPC into `cpu-snapshots.jsonl`, including IPC readiness handling.
 - **M1.2 — qualified:** first memory-observation slice using read-only IPC polling and versioned `memory.change` JSONL events.
 - **M2.0 — qualified:** analysis mode fails closed for JIT-enabled builds while normal Amiberry mode remains unaffected.
-- **M2.1 — next:** enforce external networking disabled by default in analysis mode, with any future network access requiring explicit analysis-policy opt-in.
+- **M2.1 — qualified:** guest Ethernet backends are blocked in analysis mode and direct `bsdsocket.library` emulation is authoritatively forced off, while normal Amiberry mode remains unaffected.
+- **M2.2 — next:** enforce no writable host-filesystem exposure by default in analysis mode.
 
 M1/M1.1 runtime qualification passed in GitHub Actions run `34658255305` at commit `61b75ba1d87831691c5ce5e32b8e9744959af475`.
 
 M1.2 runtime qualification passed in GitHub Actions run `34664928273` at commit `e024542961d75fd58e69d38d7803d723559243c1`.
 
 M2.0 JIT-isolation qualification passed in GitHub Actions run `34671936080` (job `103494800457`) at commit `fb0248dcd041d503e2dc2343e1baec9608860f27`.
+
+M2.1 network-isolation qualification passed in GitHub Actions run `34700520843` (job `103571342139`) at commit `7f92ef2ed711f2fe0a62d866db598926c4c4a0fc`.
 
 See:
 
@@ -34,6 +37,7 @@ See:
 - [`docs/M1_1_QUALIFICATION.md`](docs/M1_1_QUALIFICATION.md)
 - [`docs/M1_2_QUALIFICATION.md`](docs/M1_2_QUALIFICATION.md)
 - [`docs/M2_0_QUALIFICATION.md`](docs/M2_0_QUALIFICATION.md)
+- [`docs/M2_1_QUALIFICATION.md`](docs/M2_1_QUALIFICATION.md)
 
 ## Goals
 

@@ -2,6 +2,8 @@
 #include "sysconfig.h"
 #include "sysdeps.h"
 
+#include <cstdlib>
+
 #include "ethernet.h"
 #if defined(WITH_UAENET_PCAP) || defined(WITH_UAENET_TAP)
 #define HAVE_UAENET_BACKEND
@@ -46,6 +48,12 @@ static struct ethernet_data *slirp_data;
 static bool slirp_inited;
 uae_sem_t slirp_sem1, slirp_sem2;
 static int netmode;
+
+static bool amisandbox_analysis_mode()
+{
+	const char* output_dir = std::getenv("AMISANDBOX_ANALYSIS_DIR");
+	return output_dir && *output_dir;
+}
 
 static struct netdriverdata slirpd =
 {
@@ -138,6 +146,16 @@ void ethernet_receive_poll (struct netdriverdata *ndd, void *vsd)
 
 int ethernet_open (struct netdriverdata *ndd, void *vsd, void *user, ethernet_gotfunc *gotfunc, ethernet_getfunc *getfunc, int promiscuous, const uae_u8 *mac)
 {
+	// AmiSandbox M2.1a: analysis sessions fail closed at the common Ethernet
+	// backend activation point. This covers SLIRP, TAP and PCAP-backed guest
+	// Ethernet users, including uaenet.device and emulated network cards that
+	// reach this function. Direct bsdsocket.library emulation is a separate
+	// M2.1b control and must be disabled before M2.1 can be qualified.
+	if (amisandbox_analysis_mode()) {
+		write_log(_T("AmiSandbox: guest Ethernet blocked in analysis mode\n"));
+		return 0;
+	}
+
 	switch (ndd->type)
 	{
 #ifdef WITH_SLIRP
@@ -322,9 +340,9 @@ bool ethernet_enumerate (struct netdriverdata **nddp, int romtype)
 				}
 				if (!dup)
 					nddp[j++] = &nd[i];
+				}
 			}
 		}
-	}
 #endif
 	nddp[j] = NULL;
 	return true;

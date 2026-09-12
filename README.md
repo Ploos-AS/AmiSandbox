@@ -17,15 +17,19 @@ Current milestone state:
 - **M0 — complete:** project identity, security model, architecture, machine profiles, event/session model, upstream policy.
 - **M1 — qualified:** opt-in analysis sessions, `session.json`, versioned JSONL event stream, lifecycle events, and preserved normal Amiberry behavior when analysis mode is disabled.
 - **M1.1 — qualified:** live 68k D0-D7/A0-A7/PC/SR sampling through Amiberry IPC into `cpu-snapshots.jsonl`, including IPC readiness handling.
-- **M1.2 — in progress:** first memory-observation slice, focused on low-memory/vector change detection before broader write tracing.
+- **M1.2 — qualified:** first memory-observation slice using read-only IPC polling and versioned `memory.change` JSONL events.
+- **M2 — in progress:** enforce isolation controls in analysis mode, beginning with fail-closed JIT enforcement.
 
 M1/M1.1 runtime qualification passed in GitHub Actions run `34658255305` at commit `61b75ba1d87831691c5ce5e32b8e9744959af475`.
+
+M1.2 runtime qualification passed in GitHub Actions run `34664928273` at commit `e024542961d75fd58e69d38d7803d723559243c1`.
 
 See:
 
 - [`docs/AMISANDBOX_M0.md`](docs/AMISANDBOX_M0.md)
 - [`docs/M1_QUALIFICATION.md`](docs/M1_QUALIFICATION.md)
 - [`docs/M1_1_QUALIFICATION.md`](docs/M1_1_QUALIFICATION.md)
+- [`docs/M1_2_QUALIFICATION.md`](docs/M1_2_QUALIFICATION.md)
 
 ## Goals
 
@@ -92,7 +96,8 @@ When enabled, AmiSandbox creates analysis artifacts such as:
 analysis/session-001/
 ├── session.json
 ├── events.jsonl
-└── cpu-snapshots.jsonl   # when the M1.1 sampler is running
+├── cpu-snapshots.jsonl
+└── memory-changes.jsonl
 ```
 
 Normal Amiberry operation remains unchanged when `AMISANDBOX_ANALYSIS_DIR` is not set.
@@ -108,6 +113,19 @@ python3 tools/amisandbox_cpu_sampler.py --interval-ms 100
 
 The sampler uses Amiberry's existing `GET_CPU_REGS` Unix-socket command. It waits for IPC readiness before starting sampling, which avoids a startup race where the Unix socket exists before the emulator event loop can service commands.
 
+### Memory observation (M1.2)
+
+The M1.2 watcher polls selected guest-memory locations through Amiberry's existing read-only `READ_MEM` IPC command and writes `memory.change` events when values change:
+
+```bash
+python3 tools/amisandbox_memory_watch.py \
+  --address 0x64 \
+  --address 0x68 \
+  --interval-ms 100
+```
+
+Polling is intentionally a low-divergence first implementation and does not claim to capture transient writes that are reverted between samples.
+
 ## Event model
 
 The JSONL event streams are versioned and designed to remain consumable by external analysis tooling.
@@ -117,8 +135,9 @@ Initial event classes include:
 - `session.start`
 - `session.stop`
 - `cpu.snapshot`
+- `memory.change`
 
-Future milestones will add memory, disk, bootblock, process, library, chipset, snapshot, and network events.
+Future milestones will add disk, bootblock, process, library, chipset, snapshot, and network events.
 
 ## Intended ecosystem
 
@@ -160,6 +179,8 @@ cmake -B build-analysis \
   -DUSE_IPC_SOCKET=ON
 cmake --build build-analysis -j$(nproc)
 ```
+
+M2 converts analysis-mode security properties from policy into enforced controls. In particular, analysis mode will fail closed rather than run under a configuration that violates required isolation constraints.
 
 Platform-specific build requirements remain largely the same as upstream Amiberry. See the [Amiberry build documentation](https://github.com/BlitterStudio/amiberry/wiki/Compile-from-source).
 

@@ -150,10 +150,13 @@ jobs:
           print(f'PASS: {len(snaps)} live CPU snapshots; CPU state changed')
           PY
 
-          # M1.2: freeze the guest for a deterministic controlled mutation.
-          # The watcher remains read-only; WRITE_MEM is used only by this qualification.
-          WATCH_ADDRESS=0x7fff0
-          export WATCH_ADDRESS
+          # M1.2: use the end of the configured 512 KiB Slow RAM bank.
+          # Low Chip RAM is intentionally avoided here because the AROS fallback
+          # can leave ROM overlay mapped over address 0 during this CI boot state.
+          # The watcher remains read-only; WRITE_MEM is used only by qualification.
+          WATCH_ADDRESS=0x00c7fff0
+          WATCH_ADDRESS_UNCHANGED=0x00c7fff4
+          export WATCH_ADDRESS WATCH_ADDRESS_UNCHANGED
 
           python3 - <<'PY'
           import os
@@ -172,6 +175,7 @@ jobs:
           python3 tools/amisandbox_memory_watch.py \
             --socket "$IPC_SOCKET" \
             --address "$WATCH_ADDRESS" \
+            --address "$WATCH_ADDRESS_UNCHANGED" \
             --width 4 \
             --count 30 \
             --interval-ms 100 &
@@ -186,6 +190,7 @@ jobs:
 
           sock = os.environ['IPC_SOCKET']
           addr = os.environ['WATCH_ADDRESS']
+          unchanged_addr = os.environ['WATCH_ADDRESS_UNCHANGED']
 
           def command(*parts):
               s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -205,13 +210,16 @@ jobs:
               return fields[1:]
 
           old = int(command('READ_MEM', addr, 4)[0], 0)
+          unchanged = int(command('READ_MEM', unchanged_addr, 4)[0], 0)
           new = old ^ 0x00000001
           command('WRITE_MEM', addr, 4, new)
           read_back = int(command('READ_MEM', addr, 4)[0], 0)
           assert read_back == new, (old, new, read_back)
+          unchanged_read_back = int(command('READ_MEM', unchanged_addr, 4)[0], 0)
+          assert unchanged_read_back == unchanged, (unchanged, unchanged_read_back)
           with open('/tmp/amisandbox-m1_1/m1_2_test_values.txt', 'w', encoding='utf-8') as f:
-              f.write(f'{addr} {old} {new}\n')
-          print(f'M1.2 mutation verified: {addr} {old:#010x} -> {new:#010x}')
+              f.write(f'{addr} {old} {new} {unchanged_addr} {unchanged}\n')
+          print(f'M1.2 mutation verified: {addr} {old:#010x} -> {new:#010x}; {unchanged_addr} unchanged')
           PY
 
           wait "$WATCH_PID"
@@ -221,7 +229,7 @@ jobs:
           from pathlib import Path
 
           root = Path('/tmp/amisandbox-m1_1')
-          addr_text, old_text, new_text = (root / 'm1_2_test_values.txt').read_text().split()
+          addr_text, old_text, new_text, unchanged_addr_text, unchanged_text = (root / 'm1_2_test_values.txt').read_text().split()
           old = int(old_text)
           new = int(new_text)
           changes = [json.loads(line) for line in (root / 'memory-changes.jsonl').read_text().splitlines() if line.strip()]
@@ -230,7 +238,9 @@ jobs:
           event = matching[0]
           assert event['type'] == 'memory.change'
           assert event['data']['width'] == 4
-          print('PASS: M1.2 observed exactly one controlled memory.change event')
+          unchanged_events = [e for e in changes if e['data']['address'] == f"0x{int(unchanged_addr_text, 0):08x}"]
+          assert unchanged_events == [], unchanged_events
+          print('PASS: M1.2 observed exactly one controlled memory.change event and no event for unchanged watched address')
           PY
 
           python3 - <<'PY'
@@ -239,7 +249,7 @@ jobs:
           from pathlib import Path
 
           sock = os.environ['IPC_SOCKET']
-          addr_text, old_text, _ = Path('/tmp/amisandbox-m1_1/m1_2_test_values.txt').read_text().split()
+          addr_text, old_text, _, _, _ = Path('/tmp/amisandbox-m1_1/m1_2_test_values.txt').read_text().split()
 
           def command(*parts):
               s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

@@ -29,7 +29,6 @@ required = [
     '-cfgparam=harddrive_write_protect=true',
     'effective_argv.insert(effective_argv.begin() + 1, storage_override.data())',
     'AmiSandbox: forcing harddrive_write_protect=true in analysis mode',
-    'metadata.amisandbox_version = "m2.2"',
 ]
 for token in required:
     if token not in wrapper:

@@ -30,6 +30,7 @@ int main(int argc, char* argv[])
 	std::vector<char*> effective_argv(argv, argv + argc);
 	std::string bsdsocket_override;
 	std::string storage_override;
+	std::string floppy_override;
 
 	if (analysis_mode) {
 #ifdef JIT
@@ -59,8 +60,16 @@ int main(int argc, char* argv[])
 		effective_argv.insert(effective_argv.begin() + 1, storage_override.data());
 		std::fputs("AmiSandbox: forcing harddrive_write_protect=true in analysis mode\n", stderr);
 
+		// M2.3 isolation rule: floppy/removable disk images supplied as evidence
+		// must remain immutable originals. Force the global floppy write-protect
+		// preference on with authoritative cfgparam precedence, even if a hostile
+		// config or caller explicitly requests writable floppy media.
+		floppy_override = "-cfgparam=floppy_write_protect=true";
+		effective_argv.insert(effective_argv.begin() + 1, floppy_override.data());
+		std::fputs("AmiSandbox: forcing floppy_write_protect=true in analysis mode\n", stderr);
+
 		amisandbox::SessionMetadata metadata;
-		metadata.amisandbox_version = "m2.2";
+		metadata.amisandbox_version = "m2.3";
 #ifdef AMIBERRY_VERSION
 		metadata.emulator_version = AMIBERRY_VERSION;
 #else

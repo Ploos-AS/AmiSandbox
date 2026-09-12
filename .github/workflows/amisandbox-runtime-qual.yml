@@ -172,11 +172,11 @@ jobs:
           sock = os.environ['IPC_SOCKET']
           addr = os.environ['WATCH_ADDRESS']
 
-          def command(text):
+          def command(*parts):
               s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
               s.settimeout(2)
               s.connect(sock)
-              s.sendall((text + '\n').encode('ascii'))
+              s.sendall(("\t".join(str(part) for part in parts) + '\n').encode('ascii'))
               data = b''
               while b'\n' not in data:
                   chunk = s.recv(4096)
@@ -189,9 +189,9 @@ jobs:
               assert fields[0] == 'OK', line
               return fields[1:]
 
-          old = int(command(f'READ_MEM {addr} 4')[0], 0)
+          old = int(command('READ_MEM', addr, 4)[0], 0)
           new = old ^ 0x00000001
-          command(f'WRITE_MEM {addr} 4 {new}')
+          command('WRITE_MEM', addr, 4, new)
           with open('/tmp/amisandbox-m1_1/m1_2_test_values.txt', 'w', encoding='utf-8') as f:
               f.write(f'{addr} {old} {new}\n')
           print(f'M1.2 mutation: {addr} {old:#010x} -> {new:#010x}')
@@ -226,7 +226,7 @@ jobs:
           s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
           s.settimeout(2)
           s.connect(sock)
-          s.sendall(f'WRITE_MEM {addr_text} 4 {old_text}\n'.encode('ascii'))
+          s.sendall(f'WRITE_MEM\t{addr_text}\t4\t{old_text}\n'.encode('ascii'))
           response = s.recv(4096).decode(errors='replace').strip()
           s.close()
           assert response.startswith('OK'), response

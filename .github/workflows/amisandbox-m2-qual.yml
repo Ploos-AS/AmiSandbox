@@ -1,0 +1,159 @@
+name: AmiSandbox M2 Isolation Qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'src/amisandbox/**'
+      - 'src/osdep/main.cpp'
+      - 'tools/check_amisandbox_m2_0.py'
+      - 'docs/M2_0_QUALIFICATION.md'
+      - '.github/workflows/amisandbox-m2-qual.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+
+permissions:
+  contents: read
+
+jobs:
+  qualify-m2_0-jit-fail-closed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install build and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build xvfb xauth \
+            libflac-dev libmpeg2-4-dev libpng-dev libasound2-dev \
+            libmpg123-dev libportmidi-dev libserialport-dev libenet-dev \
+            libpcap-dev libzstd-dev libcurl4-openssl-dev nlohmann-json3-dev
+
+      - name: Install SDL3 and SDL3_image
+        id: sdl
+        uses: libsdl-org/setup-sdl@main
+        with:
+          install-linux-dependencies: true
+          version: 3.2.8
+          version-sdl-image: 3.2.4
+          pre-release: false
+
+      - name: Static M2.0 contract check
+        run: python3 tools/check_amisandbox_m2_0.py
+
+      - name: Build JIT-enabled qualification binary
+        run: |
+          cmake -S . -B build-m2-jit -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH='${{ steps.sdl.outputs.prefix }}' \
+            -DUSE_JIT=ON \
+            -DUSE_IPC_SOCKET=ON \
+            -DUSE_PPC=OFF \
+            -DUSE_QEMU_PPC=OFF
+          cmake --build build-m2-jit -j"$(nproc)"
+
+      - name: Analysis mode rejects JIT build
+        shell: bash
+        env:
+          AMISANDBOX_ANALYSIS_DIR: /tmp/amisandbox-m2-jit-rejected
+          AMISANDBOX_MACHINE_PROFILE: a500-aros-ci
+          AMISANDBOX_CONFIG_FINGERPRINT: github-actions-m2_0-jit-negative
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          rm -rf "$AMISANDBOX_ANALYSIS_DIR"
+          mkdir -p /tmp/amisandbox-m2-evidence
+
+          set +e
+          ./build-m2-jit/amiberry --model A500 -G -S 0 --log \
+            > /tmp/amisandbox-m2-evidence/jit-analysis-rejection.log 2>&1
+          rc=$?
+          set -e
+
+          cat /tmp/amisandbox-m2-evidence/jit-analysis-rejection.log
+          test "$rc" -eq 78
+          grep -F 'analysis mode requires a non-JIT build' \
+            /tmp/amisandbox-m2-evidence/jit-analysis-rejection.log
+          test ! -e "$AMISANDBOX_ANALYSIS_DIR/session.json"
+          test ! -e "$AMISANDBOX_ANALYSIS_DIR/events.jsonl"
+          printf 'exit_code=%s\n' "$rc" > /tmp/amisandbox-m2-evidence/jit-analysis-result.txt
+          echo 'PASS: JIT-enabled binary fails closed before analysis-session creation'
+
+      - name: JIT build still runs in normal mode
+        shell: bash
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          unset AMISANDBOX_ANALYSIS_DIR AMISANDBOX_MACHINE_PROFILE AMISANDBOX_CONFIG_FINGERPRINT
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          export IPC_SOCKET
+          rm -f "$IPC_SOCKET"
+
+          xvfb-run -a ./build-m2-jit/amiberry --model A500 -G -S 0 --log \
+            > /tmp/amisandbox-m2-evidence/jit-normal-mode.log 2>&1 &
+          AMIBERRY_PID=$!
+
+          cleanup() {
+            if kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              kill "$AMIBERRY_PID" || true
+              wait "$AMIBERRY_PID" || true
+            fi
+            rm -f "$IPC_SOCKET"
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 60); do
+            if [ -S "$IPC_SOCKET" ]; then
+              break
+            fi
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              echo 'JIT normal-mode process exited before IPC became ready'
+              cat /tmp/amisandbox-m2-evidence/jit-normal-mode.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+
+          test -S "$IPC_SOCKET"
+
+          python3 - <<'PY'
+          import os
+          import socket
+
+          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          s.settimeout(2)
+          s.connect(os.environ['IPC_SOCKET'])
+          s.sendall(b'QUIT\n')
+          response = s.recv(4096).decode(errors='replace').strip()
+          s.close()
+          assert response.startswith('OK'), response
+          print('PASS: JIT normal mode started and accepted clean QUIT')
+          PY
+
+          for i in $(seq 1 40); do
+            if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          wait "$AMIBERRY_PID"
+          trap - EXIT
+          rm -f "$IPC_SOCKET"
+          echo 'PASS: fail-closed guard does not alter normal Amiberry mode'
+
+      - name: Upload M2.0 qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: amisandbox-m2_0-jit-isolation-evidence
+          path: /tmp/amisandbox-m2-evidence/
+          if-no-files-found: warn
+          retention-days: 14

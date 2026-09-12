@@ -18,7 +18,6 @@ required_ethernet = [
     'UAENET_PCAP',
     'UAENET_TAP',
 ]
-
 for token in required_ethernet:
     if token not in ethernet:
         raise SystemExit(f"FAIL: ethernet isolation token missing: {token}")
@@ -37,7 +36,7 @@ required_bsdsocket = [
     'const bool analysis_mode = output_dir && *output_dir;',
     'if (analysis_mode)',
     '-cfgparam=bsdsocket_emu=false',
-    'effective_argv.push_back(bsdsocket_override.data())',
+    'effective_argv.insert(effective_argv.begin() + 1, bsdsocket_override.data())',
     'AmiSandbox: forcing bsdsocket_emu=false in analysis mode',
     'metadata.amisandbox_version = "m2.1"',
     'metadata.external_networking_enabled = false',
@@ -47,18 +46,24 @@ for token in required_bsdsocket:
     if token not in wrapper:
         raise SystemExit(f"FAIL: bsdsocket isolation token missing: {token}")
 
-if '_T("bsdsocket_emu"), &p->socket_emu' not in cfgfile:
-    raise SystemExit('FAIL: Amiberry no longer maps bsdsocket_emu to socket_emu')
+for token in (
+    '_T("bsdsocket_emu"), &p->socket_emu',
+    'u->next = temp_lines;',
+    'temp_lines = u;',
+):
+    if token not in cfgfile:
+        raise SystemExit(f"FAIL: cfgparam precedence contract missing: {token}")
 
 analysis_pos = wrapper.find('if (analysis_mode)')
 override_pos = wrapper.find('-cfgparam=bsdsocket_emu=false')
+insert_pos = wrapper.find('effective_argv.insert(', override_pos)
 start_pos = wrapper.find('analysis.start(', analysis_pos)
 emulator_pos = wrapper.find('amiberry_main(', start_pos)
-if min(analysis_pos, override_pos, start_pos, emulator_pos) < 0 or not (
-    analysis_pos < override_pos < start_pos < emulator_pos
+if min(analysis_pos, override_pos, insert_pos, start_pos, emulator_pos) < 0 or not (
+    analysis_pos < override_pos < insert_pos < start_pos < emulator_pos
 ):
-    raise SystemExit('FAIL: bsdsocket override must be established in analysis mode before session/emulator start')
+    raise SystemExit('FAIL: authoritative bsdsocket override must be established before session/emulator start')
 
 print('PASS: AmiSandbox M2.1 guest network fail-closed contract')
 print('  Ethernet: SLIRP/TAP/PCAP blocked at ethernet_open')
-print('  bsdsocket.library: bsdsocket_emu=false forced for analysis launches')
+print('  bsdsocket.library: authoritative bsdsocket_emu=false cfgparam in analysis mode')

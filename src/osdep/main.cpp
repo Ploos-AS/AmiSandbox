@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,59 @@ const char* env_or_empty(const char* name)
 {
 	const char* value = std::getenv(name);
 	return value ? value : "";
+}
+
+bool env_is_one(const char* name)
+{
+	const char* value = std::getenv(name);
+	return value && std::string(value) == "1";
+}
+
+std::string cfgparam_value(int argc, char* argv[], const std::string& key)
+{
+	const std::string prefix = "-cfgparam=" + key + "=";
+	for (int i = 1; i < argc; ++i) {
+		const std::string arg = argv[i] ? argv[i] : "";
+		if (arg.rfind(prefix, 0) == 0) {
+			return arg.substr(prefix.size());
+		}
+	}
+	return {};
+}
+
+bool path_is_within(const std::filesystem::path& child, const std::filesystem::path& parent)
+{
+	auto child_it = child.begin();
+	for (auto parent_it = parent.begin(); parent_it != parent.end(); ++parent_it, ++child_it) {
+		if (child_it == child.end() || *child_it != *parent_it) {
+			return false;
+		}
+	}
+	return child_it != child.end();
+}
+
+bool validated_writable_floppy(int argc, char* argv[], const char* output_dir)
+{
+	if (!env_is_one("AMISANDBOX_WRITABLE_MEDIA_COPY")) {
+		return false;
+	}
+
+	const std::string floppy0 = cfgparam_value(argc, argv, "floppy0");
+	if (floppy0.empty()) {
+		return false;
+	}
+
+	std::error_code ec;
+	const auto media_root = std::filesystem::weakly_canonical(
+		std::filesystem::path(output_dir) / "media", ec);
+	if (ec) {
+		return false;
+	}
+	const auto requested = std::filesystem::weakly_canonical(floppy0, ec);
+	if (ec || !std::filesystem::is_regular_file(requested, ec) || ec) {
+		return false;
+	}
+	return path_is_within(requested, media_root);
 }
 
 } // namespace
@@ -60,16 +114,28 @@ int main(int argc, char* argv[])
 		effective_argv.insert(effective_argv.begin() + 1, storage_override.data());
 		std::fputs("AmiSandbox: forcing harddrive_write_protect=true in analysis mode\n", stderr);
 
-		// M2.3 isolation rule: floppy/removable disk images supplied as evidence
-		// must remain immutable originals. Force the global floppy write-protect
-		// preference on with authoritative cfgparam precedence, even if a hostile
-		// config or caller explicitly requests writable floppy media.
-		floppy_override = "-cfgparam=floppy_write_protect=true";
-		effective_argv.insert(effective_argv.begin() + 1, floppy_override.data());
-		std::fputs("AmiSandbox: forcing floppy_write_protect=true in analysis mode\n", stderr);
+		// M2.3 keeps original removable-media evidence immutable. M2.5 permits
+		// writable media only when the caller explicitly opts in AND floppy0
+		// resolves to a regular file below this session's analysis/media tree.
+		// Any malformed opt-in fails closed instead of weakening M2.3.
+		const bool writable_media_requested = env_is_one("AMISANDBOX_WRITABLE_MEDIA_COPY");
+		const bool writable_media_valid = validated_writable_floppy(argc, argv, output_dir);
+		if (writable_media_requested && !writable_media_valid) {
+			std::fputs("AmiSandbox: writable media opt-in rejected; floppy0 must be a session working copy\n", stderr);
+			return 78;
+		}
+		if (writable_media_valid) {
+			floppy_override = "-cfgparam=floppy_write_protect=false";
+			effective_argv.insert(effective_argv.begin() + 1, floppy_override.data());
+			std::fputs("AmiSandbox: allowing writable disposable floppy media in analysis mode\n", stderr);
+		} else {
+			floppy_override = "-cfgparam=floppy_write_protect=true";
+			effective_argv.insert(effective_argv.begin() + 1, floppy_override.data());
+			std::fputs("AmiSandbox: forcing floppy_write_protect=true in analysis mode\n", stderr);
+		}
 
 		amisandbox::SessionMetadata metadata;
-		metadata.amisandbox_version = "m2.3";
+		metadata.amisandbox_version = "m2.5";
 #ifdef AMIBERRY_VERSION
 		metadata.emulator_version = AMIBERRY_VERSION;
 #else

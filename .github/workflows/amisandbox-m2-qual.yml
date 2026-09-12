@@ -115,7 +115,7 @@ jobs:
               break
             fi
             if ! kill -0 "$AMIBERRY_PID" 2>/dev/null; then
-              echo 'JIT normal-mode process exited before IPC became ready'
+              echo 'JIT normal-mode process exited before IPC socket appeared'
               cat /tmp/amisandbox-m2-evidence/jit-normal-mode.log
               exit 1
             fi
@@ -127,13 +127,34 @@ jobs:
           python3 - <<'PY'
           import os
           import socket
+          import time
 
-          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-          s.settimeout(2)
-          s.connect(os.environ['IPC_SOCKET'])
-          s.sendall(b'QUIT\n')
-          response = s.recv(4096).decode(errors='replace').strip()
-          s.close()
+          path = os.environ['IPC_SOCKET']
+          deadline = time.monotonic() + 15.0
+          last_error = None
+
+          while time.monotonic() < deadline:
+              try:
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                      s.settimeout(1.0)
+                      s.connect(path)
+                      s.sendall(b'GET_VERSION\n')
+                      response = s.recv(4096).decode(errors='replace').strip()
+                  if response.startswith('OK'):
+                      print(f'PASS: IPC ready: {response}')
+                      break
+                  last_error = RuntimeError(response)
+              except (FileNotFoundError, ConnectionRefusedError, socket.timeout, RuntimeError) as exc:
+                  last_error = exc
+              time.sleep(0.1)
+          else:
+              raise SystemExit(f'IPC did not become ready: {last_error}')
+
+          with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+              s.settimeout(2.0)
+              s.connect(path)
+              s.sendall(b'QUIT\n')
+              response = s.recv(4096).decode(errors='replace').strip()
           assert response.startswith('OK'), response
           print('PASS: JIT normal mode started and accepted clean QUIT')
           PY

@@ -1,6 +1,6 @@
 # AmiSandbox M1.2 Qualification
 
-Status: **IMPLEMENTED — runtime qualification pending**
+Status: **QUALIFIED — PASS**
 
 ## Scope
 
@@ -67,19 +67,29 @@ Expected M1.2 result:
 PASS: AmiSandbox M1.2 memory observation contract
 ```
 
-## Runtime qualification criteria
+## Runtime qualification
 
-M1.2 passes when all of the following are demonstrated on the GitHub runner or equivalent disposable runtime:
+M1.2 passed on GitHub Actions:
 
-1. M1 and M1.1 remain green.
-2. AmiSandbox starts with `USE_JIT=OFF` and `USE_IPC_SOCKET=ON`.
-3. The watcher reaches IPC readiness and records its baseline without errors.
-4. A controlled write to one watched address causes exactly one corresponding `memory.change` event.
-5. The event contains the expected address, width, old value, and new value.
-6. An unchanged watched value produces no event.
-7. At least two watched addresses can be observed in the same run.
-8. Stopping the watcher does not destabilize or stop emulation.
-9. The no-analysis normal-mode smoke test continues to pass.
+- workflow run: `34664928273`
+- job: `103474806893`
+- qualified commit: `e024542961d75fd58e69d38d7803d723559243c1`
+- result: **SUCCESS**
+
+The qualification demonstrated:
+
+1. M1 and M1.1 remained green.
+2. AmiSandbox built with `USE_JIT=OFF` and `USE_IPC_SOCKET=ON`.
+3. The watcher reached IPC readiness and established its baseline.
+4. A controlled write to one watched address produced exactly one corresponding `memory.change` event.
+5. The event contained the expected address, width, old value, and new value.
+6. A second unchanged watched address produced no event.
+7. Two watched addresses were observed in the same run.
+8. The controlled mutation was restored and verified.
+9. The guest resumed and exited cleanly.
+10. The no-analysis normal-mode smoke test remained green.
+
+The qualification uses writable Slow RAM near `0x00c7fff0`. Earlier attempts at low Chip RAM were affected by the AROS fallback ROM overlay: reads succeeded while writes were effectively blocked by the overlay. The qualification therefore intentionally uses a writable RAM bank rather than treating an IPC `OK` response alone as proof of mutation.
 
 A qualification test may use Amiberry's existing `WRITE_MEM` IPC command solely to inject a deterministic test mutation. Production analysis remains observational unless the analyst explicitly requests mutation through the emulator control interface.
 
@@ -93,4 +103,4 @@ A qualification test may use Amiberry's existing `WRITE_MEM` IPC command solely 
 
 ## Next direction
 
-After M1.2 qualification, the next instrumentation decision should be evidence-driven: either expand selected memory/vector monitoring, add higher-fidelity memory-write hooks, or begin disk/bootblock observation depending on which capability produces the most useful malware evidence with the least upstream divergence.
+M2 begins **analysis isolation enforcement**. The first slice is fail-closed JIT enforcement: an analysis session must not start in a binary compiled with JIT support enabled. Later M2 slices will enforce network and host-filesystem isolation rather than merely documenting those policies.

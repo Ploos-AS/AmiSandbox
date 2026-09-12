@@ -18,11 +18,14 @@ Current milestone state:
 - **M1 — qualified:** opt-in analysis sessions, `session.json`, versioned JSONL event stream, lifecycle events, and preserved normal Amiberry behavior when analysis mode is disabled.
 - **M1.1 — qualified:** live 68k D0-D7/A0-A7/PC/SR sampling through Amiberry IPC into `cpu-snapshots.jsonl`, including IPC readiness handling.
 - **M1.2 — qualified:** first memory-observation slice using read-only IPC polling and versioned `memory.change` JSONL events.
-- **M2 — in progress:** enforce isolation controls in analysis mode, beginning with fail-closed JIT enforcement.
+- **M2.0 — qualified:** analysis mode fails closed for JIT-enabled builds while normal Amiberry mode remains unaffected.
+- **M2.1 — next:** enforce external networking disabled by default in analysis mode, with any future network access requiring explicit analysis-policy opt-in.
 
 M1/M1.1 runtime qualification passed in GitHub Actions run `34658255305` at commit `61b75ba1d87831691c5ce5e32b8e9744959af475`.
 
 M1.2 runtime qualification passed in GitHub Actions run `34664928273` at commit `e024542961d75fd58e69d38d7803d723559243c1`.
+
+M2.0 JIT-isolation qualification passed in GitHub Actions run `34671936080` (job `103494800457`) at commit `fb0248dcd041d503e2dc2343e1baec9608860f27`.
 
 See:
 
@@ -30,6 +33,7 @@ See:
 - [`docs/M1_QUALIFICATION.md`](docs/M1_QUALIFICATION.md)
 - [`docs/M1_1_QUALIFICATION.md`](docs/M1_1_QUALIFICATION.md)
 - [`docs/M1_2_QUALIFICATION.md`](docs/M1_2_QUALIFICATION.md)
+- [`docs/M2_0_QUALIFICATION.md`](docs/M2_0_QUALIFICATION.md)
 
 ## Goals
 
@@ -118,107 +122,16 @@ The sampler uses Amiberry's existing `GET_CPU_REGS` Unix-socket command. It wait
 The M1.2 watcher polls selected guest-memory locations through Amiberry's existing read-only `READ_MEM` IPC command and writes `memory.change` events when values change:
 
 ```bash
-python3 tools/amisandbox_memory_watch.py \
-  --address 0x64 \
-  --address 0x68 \
-  --interval-ms 100
+export AMISANDBOX_ANALYSIS_DIR="$PWD/analysis/session-001"
+python3 tools/amisandbox_memory_watch.py --address 0x64 --address 0x68 --interval-ms 100
 ```
 
-Polling is intentionally a low-divergence first implementation and does not claim to capture transient writes that are reverted between samples.
-
-## Event model
-
-The JSONL event streams are versioned and designed to remain consumable by external analysis tooling.
-
-Initial event classes include:
-
-- `session.start`
-- `session.stop`
-- `cpu.snapshot`
-- `memory.change`
-
-Future milestones will add disk, bootblock, process, library, chipset, snapshot, and network events.
-
-## Intended ecosystem
-
-```text
-AmiGuard / analyst sample
-          |
-          v
-AmiGuard Signature Workstation (ASW)
-          |
-          v
-      AmiSandbox
-          |
-   dynamic artifacts
-          |
-          v
-     AmiForensics
-          |
-          v
-signatures / reports / research
-```
-
-AmiSandbox is also intended to remain useful as a standalone malware-analysis workstation.
-
-## Building
-
-AmiSandbox currently follows the upstream Amiberry build system.
-
-```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-```
-
-For analysis-oriented builds, JIT should be disabled and IPC enabled:
-
-```bash
-cmake -B build-analysis \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DUSE_JIT=OFF \
-  -DUSE_IPC_SOCKET=ON
-cmake --build build-analysis -j$(nproc)
-```
-
-M2 converts analysis-mode security properties from policy into enforced controls. In particular, analysis mode will fail closed rather than run under a configuration that violates required isolation constraints.
-
-Platform-specific build requirements remain largely the same as upstream Amiberry. See the [Amiberry build documentation](https://github.com/BlitterStudio/amiberry/wiki/Compile-from-source).
+The default watch set covers the 68000 autovectors at `0x64` through `0x7c`. The watcher establishes a baseline first and emits events only when a watched value changes. This polling implementation is intentionally the first low-divergence memory-observation slice; it can miss transient writes that change and revert between polls.
 
 ## Upstream relationship
 
-AmiSandbox is derived from Amiberry, which in turn uses the WinUAE emulation core.
+AmiSandbox follows Amiberry upstream and should minimize invasive divergence where practical. Analysis-specific code should remain clearly separated and reviewable so upstream updates can be incorporated without turning the fork into an unrelated emulator.
 
-We aim to:
+## License
 
-- keep AmiSandbox-specific code isolated where practical
-- minimize unnecessary divergence from Amiberry
-- periodically integrate appropriate upstream changes
-- submit generally useful emulator fixes upstream when practical
-- keep malware-analysis-specific behavior in AmiSandbox unless upstream wants it
-
-Upstream project:
-
-- [BlitterStudio/amiberry](https://github.com/BlitterStudio/amiberry)
-- [amiberry.com](https://amiberry.com/)
-
-## Contributing
-
-Contributions are welcome, especially around:
-
-- emulator instrumentation
-- deterministic execution
-- Amiga malware research
-- forensic artifact formats
-- safe sample handling
-- automated qualification
-- documentation and test coverage
-
-Please keep generic emulator changes separable from AmiSandbox-specific analysis functionality whenever practical.
-
-## License and attribution
-
-AmiSandbox is derived from Amiberry and is distributed under the **GNU General Public License v3.0**. See [`LICENSE`](LICENSE).
-
-Copyright and attribution notices from Amiberry, WinUAE, and other upstream components remain applicable to their respective code.
-
-AmiSandbox additions are developed by the Ploos-AS project contributors.
+AmiSandbox inherits Amiberry's GNU GPLv3 licensing. See [`LICENSE`](LICENSE).

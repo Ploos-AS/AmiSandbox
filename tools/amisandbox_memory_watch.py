@@ -76,7 +76,7 @@ def parse_address(value: str) -> int:
 
 
 def read_value(socket_path: Path, address: int, width: int) -> int:
-    fields = request(socket_path, f"READ_MEM {address:#x} {width}")
+    fields = request(socket_path, f"READ_MEM\t{address:#x}\t{width}")
     if len(fields) != 1:
         raise RuntimeError(f"unexpected READ_MEM response at {address:#x}: {fields!r}")
     return int(fields[0], 0)

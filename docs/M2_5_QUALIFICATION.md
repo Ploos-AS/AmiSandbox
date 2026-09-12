@@ -1,6 +1,12 @@
 # AmiSandbox M2.5 qualification — disposable media launch integration
 
-Status: **IMPLEMENTED — runtime qualification pending**
+Status: **QUALIFIED — PASS**
+
+Qualification run: `34721397126`
+
+Qualification job: `103627831843`
+
+Qualified commit: `3d304ef73a33f357e88049b55a48b072c8df3da6`
 
 ## Goal
 
@@ -26,9 +32,12 @@ Analysis mode keeps the M2.3 read-only default unless all of these are true:
 An explicit writable opt-in that fails validation exits with configuration
 status 78 rather than falling back to writable media.
 
-## Qualification criteria
+## Qualification result
 
-The dedicated GitHub Actions qualification must prove:
+GitHub Actions run `34721397126`, job `103627831843`, completed successfully on
+commit `3d304ef73a33f357e88049b55a48b072c8df3da6`.
+
+The run proved:
 
 - M1 through M2.5 static contract checks pass.
 - A non-JIT AmiSandbox binary builds with IPC enabled.
@@ -37,7 +46,7 @@ The dedicated GitHub Actions qualification must prove:
 - Runtime logs contain the M2.5 writable-disposable-media diagnostic.
 - `session.json` reports `amisandbox_version=m2.5`, JIT disabled, and external
   networking disabled.
-- The working copy may change during the session while the source SHA-256 stays
+- The working copy can change during the session while the source SHA-256 stays
   identical.
 - Finalization records `mutated=true` for the changed working copy.
 - A hostile direct opt-in that points `floppy0` outside `<analysis-dir>/media/`
@@ -49,8 +58,7 @@ The dedicated GitHub Actions qualification must prove:
 ## Scope note
 
 M2.5 is runtime integration of a **full-copy disposable image**, not block-level
-copy-on-write. The initial CI qualification may mutate the working copy from the
-host side while Amiberry is running to prove lifecycle, path isolation, source
-immutability, and final mutation accounting. That does **not** by itself prove a
-guest-side disk write path. A later qualification may add a controlled Amiga
-guest write operation.
+copy-on-write. The qualified CI path mutates the working copy from the host side
+while Amiberry is running to prove lifecycle, path isolation, source
+immutability, and final mutation accounting. It does **not** prove a guest-side
+disk write path. That stronger guarantee is the target of M2.6.

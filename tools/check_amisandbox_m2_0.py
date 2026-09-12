@@ -6,11 +6,11 @@ main = (root / "src/osdep/main.cpp").read_text(encoding="utf-8")
 
 required = [
     'const char* output_dir = std::getenv("AMISANDBOX_ANALYSIS_DIR")',
-    'if (output_dir && *output_dir)',
+    'const bool analysis_mode = output_dir && *output_dir;',
+    'if (analysis_mode)',
     '#ifdef JIT',
     'analysis mode requires a non-JIT build',
     'return 78;',
-    'metadata.amisandbox_version = "m2.0";',
     'metadata.jit_enabled = false;',
 ]
 

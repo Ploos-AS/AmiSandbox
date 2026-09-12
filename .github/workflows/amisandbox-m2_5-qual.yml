@@ -1,0 +1,307 @@
+name: AmiSandbox M2.5 Disposable Media Launch Qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'src/osdep/main.cpp'
+      - 'tools/amisandbox_media_prepare.py'
+      - 'tools/amisandbox_launch.py'
+      - 'tools/check_amisandbox_m2_*.py'
+      - 'docs/M2_5_QUALIFICATION.md'
+      - '.github/workflows/amisandbox-m2_5-qual.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+
+permissions:
+  contents: read
+
+jobs:
+  qualify-m2_5-disposable-launch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install build and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build xvfb xauth \
+            libflac-dev libmpeg2-4-dev libpng-dev libasound2-dev \
+            libmpg123-dev libportmidi-dev libserialport-dev libenet-dev \
+            libpcap-dev libzstd-dev libcurl4-openssl-dev nlohmann-json3-dev
+
+      - name: Install SDL3 and SDL3_image
+        id: sdl
+        uses: libsdl-org/setup-sdl@main
+        with:
+          install-linux-dependencies: true
+          version: 3.2.8
+          version-sdl-image: 3.2.4
+          pre-release: false
+
+      - name: Static M1 through M2.5 contract checks
+        run: |
+          python3 tools/check_amisandbox_m1.py
+          python3 tools/check_amisandbox_m1_1.py
+          python3 tools/check_amisandbox_m1_2.py
+          python3 tools/check_amisandbox_m2_0.py
+          python3 tools/check_amisandbox_m2_1.py
+          python3 tools/check_amisandbox_m2_2.py
+          python3 tools/check_amisandbox_m2_3.py
+          python3 tools/check_amisandbox_m2_4.py
+          python3 tools/check_amisandbox_m2_5.py
+
+      - name: Build non-JIT analysis binary
+        run: |
+          cmake -S . -B build-m2_5 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH='${{ steps.sdl.outputs.prefix }}' \
+            -DUSE_JIT=OFF \
+            -DUSE_IPC_SOCKET=ON \
+            -DUSE_PPC=OFF \
+            -DUSE_QEMU_PPC=OFF
+          cmake --build build-m2_5 -j"$(nproc)"
+
+      - name: Integrated launch mounts writable disposable copy
+        shell: bash
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          ANALYSIS=/tmp/amisandbox-m2_5-analysis
+          EVIDENCE=/tmp/amisandbox-m2_5-evidence
+          MEDIA=/tmp/amisandbox-m2_5-source
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          rm -rf "$ANALYSIS" "$EVIDENCE" "$MEDIA"
+          mkdir -p "$EVIDENCE" "$MEDIA"
+          rm -f "$IPC_SOCKET"
+
+          truncate -s 901120 "$MEDIA/original.adf"
+          printf 'AMISANDBOX-M2.5-ORIGINAL' | dd of="$MEDIA/original.adf" bs=1 seek=1024 conv=notrunc status=none
+          BEFORE_SHA=$(sha256sum "$MEDIA/original.adf" | awk '{print $1}')
+          export ANALYSIS MEDIA BEFORE_SHA IPC_SOCKET
+
+          python3 tools/amisandbox_launch.py \
+            --emulator ./build-m2_5/amiberry \
+            --analysis-dir "$ANALYSIS" \
+            --source "$MEDIA/original.adf" \
+            --machine-profile a500-aros-ci \
+            --config-fingerprint github-actions-m2_5-disposable-launch \
+            -- \
+            --model A500 -G -S 0 --log \
+            > "$EVIDENCE/launch.log" 2>&1 &
+          LAUNCHER_PID=$!
+
+          cleanup() {
+            if kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+              kill "$LAUNCHER_PID" || true
+              wait "$LAUNCHER_PID" || true
+            fi
+            rm -f "$IPC_SOCKET"
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 60); do
+            if [ -S "$IPC_SOCKET" ]; then break; fi
+            if ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+              cat "$EVIDENCE/launch.log"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test -S "$IPC_SOCKET"
+
+          grep -F 'AmiSandbox M2.5 working media:' "$EVIDENCE/launch.log"
+          grep -F 'AmiSandbox: allowing writable disposable floppy media in analysis mode' "$EVIDENCE/launch.log"
+          ! grep -F -- "-cfgparam=floppy0=$MEDIA/original.adf" "$EVIDENCE/launch.log"
+
+          python3 - <<'PY'
+          import hashlib, json, os, socket, time
+          from pathlib import Path
+
+          analysis = Path(os.environ['ANALYSIS'])
+          source = Path(os.environ['MEDIA']) / 'original.adf'
+          manifest_path = analysis / 'media' / 'media-manifest.json'
+          manifest = json.loads(manifest_path.read_text())
+          working = Path(manifest['working']['path'])
+          assert working.is_file(), working
+          assert working.parent.resolve() == (analysis / 'media').resolve(), working
+          assert source.resolve() != working.resolve()
+          assert hashlib.sha256(source.read_bytes()).hexdigest() == os.environ['BEFORE_SHA']
+
+          meta = json.loads((analysis / 'session.json').read_text())
+          assert meta['amisandbox_version'] == 'm2.5', meta
+          assert meta['jit_enabled'] is False, meta
+          assert meta['external_networking_enabled'] is False, meta
+
+          with working.open('r+b') as handle:
+              handle.seek(2048)
+              handle.write(b'AMISANDBOX-M2.5-WORKING-MUTATION')
+              handle.flush()
+
+          path = os.environ['IPC_SOCKET']
+          deadline = time.monotonic() + 15
+          while True:
+              try:
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                      s.settimeout(1)
+                      s.connect(path)
+                      s.sendall(b'GET_VERSION\n')
+                      response = s.recv(4096).decode(errors='replace').strip()
+                  if response.startswith('OK'):
+                      break
+              except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+                  pass
+              if time.monotonic() >= deadline:
+                  raise SystemExit('IPC did not become ready')
+              time.sleep(.1)
+
+          with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+              s.settimeout(2)
+              s.connect(path)
+              s.sendall(b'QUIT\n')
+              response = s.recv(4096).decode(errors='replace').strip()
+          assert response.startswith('OK'), response
+          PY
+
+          wait "$LAUNCHER_PID"
+          trap - EXIT
+          rm -f "$IPC_SOCKET"
+
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          analysis = Path(os.environ['ANALYSIS'])
+          source = Path(os.environ['MEDIA']) / 'original.adf'
+          manifest = json.loads((analysis / 'media' / 'media-manifest.json').read_text())
+          assert hashlib.sha256(source.read_bytes()).hexdigest() == os.environ['BEFORE_SHA']
+          assert manifest['source']['sha256_final'] == os.environ['BEFORE_SHA'], manifest
+          assert manifest['working']['mutated'] is True, manifest
+          assert manifest['working']['sha256_final'] != manifest['working']['sha256_initial'], manifest
+          print('PASS: M2.5 launcher preserved source and finalized mutated working media')
+          PY
+
+      - name: Invalid writable opt-in fails closed
+        shell: bash
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          ANALYSIS=/tmp/amisandbox-m2_5-reject
+          OUTSIDE=/tmp/amisandbox-m2_5-outside.adf
+          LOG=/tmp/amisandbox-m2_5-evidence/reject.log
+          rm -rf "$ANALYSIS"
+          mkdir -p "$ANALYSIS/media"
+          truncate -s 901120 "$OUTSIDE"
+
+          set +e
+          AMISANDBOX_ANALYSIS_DIR="$ANALYSIS" \
+          AMISANDBOX_WRITABLE_MEDIA_COPY=1 \
+          ./build-m2_5/amiberry \
+            "-cfgparam=floppy0=$OUTSIDE" \
+            -cfgparam=floppy_write_protect=false \
+            --model A500 -G -S 0 --log \
+            > "$LOG" 2>&1
+          RC=$?
+          set -e
+
+          test "$RC" -eq 78
+          grep -F 'AmiSandbox: writable media opt-in rejected; floppy0 must be a session working copy' "$LOG"
+          echo 'PASS: M2.5 invalid writable-media opt-in failed closed'
+
+      - name: Default analysis remains M2.3 read-only
+        shell: bash
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          ANALYSIS=/tmp/amisandbox-m2_5-default
+          MEDIA=/tmp/amisandbox-m2_5-default-source
+          LOG=/tmp/amisandbox-m2_5-evidence/default.log
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          rm -rf "$ANALYSIS" "$MEDIA"
+          mkdir -p "$ANALYSIS" "$MEDIA"
+          rm -f "$IPC_SOCKET"
+          truncate -s 901120 "$MEDIA/original.adf"
+          export IPC_SOCKET
+
+          AMISANDBOX_ANALYSIS_DIR="$ANALYSIS" \
+          xvfb-run -a ./build-m2_5/amiberry \
+            -cfgparam=floppy_write_protect=false \
+            "-cfgparam=floppy0=$MEDIA/original.adf" \
+            --model A500 -G -S 0 --log \
+            > "$LOG" 2>&1 &
+          PID=$!
+
+          cleanup() {
+            if kill -0 "$PID" 2>/dev/null; then
+              kill "$PID" || true
+              wait "$PID" || true
+            fi
+            rm -f "$IPC_SOCKET"
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 60); do
+            if [ -S "$IPC_SOCKET" ]; then break; fi
+            if ! kill -0 "$PID" 2>/dev/null; then
+              cat "$LOG"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test -S "$IPC_SOCKET"
+          grep -F 'AmiSandbox: forcing floppy_write_protect=true in analysis mode' "$LOG"
+          ! grep -F 'AmiSandbox: allowing writable disposable floppy media in analysis mode' "$LOG"
+
+          python3 - <<'PY'
+          import os, socket, time
+          path = os.environ['IPC_SOCKET']
+          deadline = time.monotonic() + 15
+          while True:
+              try:
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                      s.settimeout(1)
+                      s.connect(path)
+                      s.sendall(b'GET_VERSION\n')
+                      response = s.recv(4096).decode(errors='replace').strip()
+                  if response.startswith('OK'):
+                      break
+              except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+                  pass
+              if time.monotonic() >= deadline:
+                  raise SystemExit('IPC did not become ready')
+              time.sleep(.1)
+          with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+              s.settimeout(2)
+              s.connect(path)
+              s.sendall(b'QUIT\n')
+              response = s.recv(4096).decode(errors='replace').strip()
+          assert response.startswith('OK'), response
+          PY
+
+          wait "$PID"
+          trap - EXIT
+          rm -f "$IPC_SOCKET"
+          echo 'PASS: M2.3 read-only default remains active without M2.5 opt-in'
+
+      - name: Upload M2.5 qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: amisandbox-m2_5-disposable-launch-evidence
+          path: |
+            /tmp/amisandbox-m2_5-evidence/
+            /tmp/amisandbox-m2_5-analysis/
+            /tmp/amisandbox-m2_5-source/
+            /tmp/amisandbox-m2_5-reject/
+            /tmp/amisandbox-m2_5-default/
+          if-no-files-found: warn
+          retention-days: 14

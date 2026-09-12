@@ -150,10 +150,25 @@ jobs:
           print(f'PASS: {len(snaps)} live CPU snapshots; CPU state changed')
           PY
 
-          # M1.2: watch one disposable Chip RAM location, mutate it once through
-          # Amiberry's existing WRITE_MEM test/control command, then restore it.
+          # M1.2: freeze the guest for a deterministic controlled mutation.
+          # The watcher remains read-only; WRITE_MEM is used only by this qualification.
           WATCH_ADDRESS=0x7fff0
           export WATCH_ADDRESS
+
+          python3 - <<'PY'
+          import os
+          import socket
+
+          s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          s.settimeout(2)
+          s.connect(os.environ['IPC_SOCKET'])
+          s.sendall(b'PAUSE\n')
+          response = s.recv(4096).decode(errors='replace').strip()
+          s.close()
+          assert response.startswith('OK'), response
+          print('PASS: guest paused for deterministic M1.2 mutation')
+          PY
+
           python3 tools/amisandbox_memory_watch.py \
             --socket "$IPC_SOCKET" \
             --address "$WATCH_ADDRESS" \
@@ -192,9 +207,11 @@ jobs:
           old = int(command('READ_MEM', addr, 4)[0], 0)
           new = old ^ 0x00000001
           command('WRITE_MEM', addr, 4, new)
+          read_back = int(command('READ_MEM', addr, 4)[0], 0)
+          assert read_back == new, (old, new, read_back)
           with open('/tmp/amisandbox-m1_1/m1_2_test_values.txt', 'w', encoding='utf-8') as f:
               f.write(f'{addr} {old} {new}\n')
-          print(f'M1.2 mutation: {addr} {old:#010x} -> {new:#010x}')
+          print(f'M1.2 mutation verified: {addr} {old:#010x} -> {new:#010x}')
           PY
 
           wait "$WATCH_PID"
@@ -223,14 +240,42 @@ jobs:
 
           sock = os.environ['IPC_SOCKET']
           addr_text, old_text, _ = Path('/tmp/amisandbox-m1_1/m1_2_test_values.txt').read_text().split()
+
+          def command(*parts):
+              s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+              s.settimeout(2)
+              s.connect(sock)
+              s.sendall(("\t".join(str(part) for part in parts) + '\n').encode('ascii'))
+              data = b''
+              while b'\n' not in data:
+                  chunk = s.recv(4096)
+                  if not chunk:
+                      break
+                  data += chunk
+              s.close()
+              line = data.decode().splitlines()[0]
+              fields = line.split('\t')
+              assert fields[0] == 'OK', line
+              return fields[1:]
+
+          old = int(old_text)
+          command('WRITE_MEM', addr_text, 4, old)
+          read_back = int(command('READ_MEM', addr_text, 4)[0], 0)
+          assert read_back == old, (old, read_back)
+          print('PASS: M1.2 controlled mutation restored and verified')
+          PY
+
+          python3 - <<'PY'
+          import os
+          import socket
           s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
           s.settimeout(2)
-          s.connect(sock)
-          s.sendall(f'WRITE_MEM\t{addr_text}\t4\t{old_text}\n'.encode('ascii'))
+          s.connect(os.environ['IPC_SOCKET'])
+          s.sendall(b'RESUME\n')
           response = s.recv(4096).decode(errors='replace').strip()
           s.close()
           assert response.startswith('OK'), response
-          print('PASS: M1.2 controlled mutation restored')
+          print('PASS: guest resumed after M1.2 qualification')
           PY
 
           python3 - <<'PY'

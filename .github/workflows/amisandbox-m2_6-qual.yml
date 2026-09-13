@@ -218,7 +218,7 @@ jobs:
             --config-fingerprint github-actions-m2_6-guest-write \
             -- \
             --model A1200 -G -S 0 --log \
-            -s "filesystem2=ro,DH0:AROS:$AROS_ROOT,10" \
+            -m "AROS:$AROS_ROOT" \
             > "$EVIDENCE/launch.log" 2>&1 &
           LAUNCHER_PID=$!
 

@@ -69,13 +69,16 @@ def main() -> int:
     if forwarded and forwarded[0] == "--":
         forwarded = forwarded[1:]
 
-    # Model/profile arguments can reset media configuration in Amiberry. Apply
-    # the trusted disposable floppy cfgparams last so DF0 cannot be cleared by a
-    # later --model or configuration argument supplied by the caller.
+    # Quickstart/model processing can clear floppy0 when it is supplied only as
+    # a generic cfgparam. Use Amiberry's dedicated -0 media option after all
+    # caller/model arguments so DF0 is populated by the native media-loading
+    # path. The core still performs the trusted disposable-copy validation and
+    # is authoritative for allowing writes only to this session working image.
     command = [
         str(emulator),
         *forwarded,
-        f"-cfgparam=floppy0={working}",
+        "-0",
+        str(working),
         "-cfgparam=floppy_write_protect=false",
     ]
 

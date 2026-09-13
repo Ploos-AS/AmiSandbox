@@ -69,11 +69,14 @@ def main() -> int:
     if forwarded and forwarded[0] == "--":
         forwarded = forwarded[1:]
 
+    # Model/profile arguments can reset media configuration in Amiberry. Apply
+    # the trusted disposable floppy cfgparams last so DF0 cannot be cleared by a
+    # later --model or configuration argument supplied by the caller.
     command = [
         str(emulator),
+        *forwarded,
         f"-cfgparam=floppy0={working}",
         "-cfgparam=floppy_write_protect=false",
-        *forwarded,
     ]
 
     # Amiberry still requires an X display even for non-interactive analysis

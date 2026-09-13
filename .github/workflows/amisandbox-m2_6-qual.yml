@@ -116,8 +116,7 @@ jobs:
             + makedir s \
             + write "$WORK/GuestWrite" c/GuestWrite \
             + write "$WORK/Startup-Sequence" s/Startup-Sequence \
-            + write "$WORK/M2_6_MARKER" M2_6_MARKER \
-            + write "$WORK/M2_6_OFFSET" M2_6_OFFSET
+            + write "$WORK/M2_6_MARKER" M2_6_MARKER
 
           export WORK
           OFFSET=$(python3 - <<'PY'

@@ -8,9 +8,10 @@ M2.6 strengthens M2.5 by proving that a write initiated by code running inside
 the emulated Amiga can mutate only the disposable working image while the
 original evidence image remains immutable.
 
-M2.5 already qualifies launch integration, path isolation, fail-closed policy,
-and mutation accounting. M2.6 adds the missing provenance guarantee: the disk
-mutation must originate from the guest.
+M2.5 launch integration, path isolation, fail-closed policy, default read-only
+behavior, and mutation accounting are qualified on the native DF0 mount path.
+M2.6 adds the missing provenance guarantee: the disk mutation must originate
+from the guest.
 
 ## Qualification boundary
 
@@ -67,7 +68,8 @@ an actual guest-side disk write.
 
 ## Initial implementation status
 
-The evidence verifier and static contract are implemented. The remaining M2.6
-work is the guest execution harness and dedicated GitHub Actions runtime
-qualification. M2.6 must remain pending until that workflow demonstrates a real
-guest-originated write.
+The evidence verifier, static contract, guest writer, and dedicated runtime
+qualification harness are implemented. The remaining gate is a successful
+GitHub Actions runtime qualification demonstrating a real guest-originated
+write. M2.6 must remain pending until that workflow passes with the required
+evidence.

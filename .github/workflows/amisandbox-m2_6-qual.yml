@@ -1,0 +1,291 @@
+name: AmiSandbox M2.6 Guest Media Mutation Qualification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'tools/m2_6_guest/**'
+      - 'tools/amisandbox_guest_media_verify.py'
+      - 'tools/check_amisandbox_m2_6.py'
+      - 'tools/amisandbox_media_prepare.py'
+      - 'tools/amisandbox_launch.py'
+      - 'docs/M2_6_QUALIFICATION.md'
+      - '.github/workflows/amisandbox-m2_6-qual.yml'
+      - 'src/osdep/main.cpp'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+
+permissions:
+  contents: read
+
+jobs:
+  qualify-m2_6-guest-media-mutation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TOOLCHAIN_SHA256: 381e227c9ef552f073771d6f851cfdf873b574f3cf5db7c1c0107ea5d7146edc
+      MARKER_TEXT: AMISANDBOX-M2.6-GUEST-WRITE
+      MARKER_HEX: 414d4953414e44424f582d4d322e362d47554553542d5752495445
+      PLACEHOLDER_TEXT: AMISANDBOX-M2.6-HOST-SEED-X
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install build and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build xvfb xauth python3-pip \
+            libflac-dev libmpeg2-4-dev libpng-dev libasound2-dev \
+            libmpg123-dev libportmidi-dev libserialport-dev libenet-dev \
+            libpcap-dev libzstd-dev libcurl4-openssl-dev nlohmann-json3-dev
+          python3 -m pip install --break-system-packages amitools
+
+      - name: Install SDL3 and SDL3_image
+        id: sdl
+        uses: libsdl-org/setup-sdl@main
+        with:
+          install-linux-dependencies: true
+          version: 3.2.8
+          version-sdl-image: 3.2.4
+          pre-release: false
+
+      - name: Install m68k-amigaos guest compiler
+        run: |
+          set -euo pipefail
+          cd "$HOME"
+          curl --fail --silent --show-error --connect-timeout 15 --max-time 120 \
+            --retry 3 --retry-connrefused \
+            https://franke.ms/download/amiga-gcc.tgz --output amiga-gcc.tgz
+          echo "${TOOLCHAIN_SHA256}  amiga-gcc.tgz" | sha256sum -c -
+          tar -xf amiga-gcc.tgz
+          rm amiga-gcc.tgz
+          test -x "$HOME/opt/amiga/bin/m68k-amigaos-gcc"
+          "$HOME/opt/amiga/bin/m68k-amigaos-gcc" --version | head -1
+
+      - name: Static M1 through M2.6 contract checks
+        run: |
+          python3 tools/check_amisandbox_m1.py
+          python3 tools/check_amisandbox_m1_1.py
+          python3 tools/check_amisandbox_m1_2.py
+          python3 tools/check_amisandbox_m2_0.py
+          python3 tools/check_amisandbox_m2_1.py
+          python3 tools/check_amisandbox_m2_2.py
+          python3 tools/check_amisandbox_m2_3.py
+          python3 tools/check_amisandbox_m2_4.py
+          python3 tools/check_amisandbox_m2_5.py
+          python3 tools/check_amisandbox_m2_6.py
+
+      - name: Build non-JIT AmiSandbox
+        run: |
+          cmake -S . -B build-m2_6 -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH='${{ steps.sdl.outputs.prefix }}' \
+            -DUSE_JIT=OFF \
+            -DUSE_IPC_SOCKET=ON \
+            -DUSE_PPC=OFF \
+            -DUSE_QEMU_PPC=OFF
+          cmake --build build-m2_6 -j"$(nproc)"
+
+      - name: Build bootable guest qualification ADF
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORK=/tmp/amisandbox-m2_6-build
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+
+          "$HOME/opt/amiga/bin/m68k-amigaos-gcc" \
+            -m68000 -Os -noixemul \
+            tools/m2_6_guest/guest_write_stdio.c \
+            -o "$WORK/GuestWrite"
+          file "$WORK/GuestWrite"
+
+          printf '%s' "$PLACEHOLDER_TEXT" > "$WORK/M2_6_MARKER"
+          test "$(wc -c < "$WORK/M2_6_MARKER")" -eq "$(printf '%s' "$MARKER_TEXT" | wc -c)"
+          printf '00000000\n' > "$WORK/M2_6_OFFSET"
+          printf 'C:GuestWrite\n' > "$WORK/Startup-Sequence"
+
+          xdftool "$WORK/source.adf" format M26QUAL \
+            + boot install \
+            + makedir c \
+            + makedir s \
+            + write "$WORK/GuestWrite" c/GuestWrite \
+            + write "$WORK/Startup-Sequence" s/Startup-Sequence \
+            + write "$WORK/M2_6_MARKER" M2_6_MARKER \
+            + write "$WORK/M2_6_OFFSET" M2_6_OFFSET
+
+          export WORK
+          OFFSET=$(python3 - <<'PY'
+          import os
+          from pathlib import Path
+          image = (Path(os.environ['WORK']) / 'source.adf').read_bytes()
+          seed = os.environ['PLACEHOLDER_TEXT'].encode('ascii')
+          first = image.find(seed)
+          assert first >= 0, 'placeholder not found in source ADF'
+          assert image.find(seed, first + 1) < 0, 'placeholder is not unique'
+          print(first)
+          PY
+          )
+          printf '%08d\n' "$OFFSET" > "$WORK/M2_6_OFFSET"
+          xdftool "$WORK/source.adf" write "$WORK/M2_6_OFFSET" M2_6_OFFSET
+
+          export OFFSET
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          image = (Path(os.environ['WORK']) / 'source.adf').read_bytes()
+          seed = os.environ['PLACEHOLDER_TEXT'].encode('ascii')
+          marker = os.environ['MARKER_TEXT'].encode('ascii')
+          offset = int(os.environ['OFFSET'])
+          assert image[offset:offset+len(seed)] == seed
+          assert marker not in image
+          print(f'PASS: deterministic guest marker slot at image offset {offset}')
+          PY
+          sha256sum "$WORK/source.adf" | tee "$WORK/source.sha256"
+          echo "$OFFSET" > "$WORK/image-offset.txt"
+
+      - name: Guest writes marker and witness inside Amiga
+        shell: bash
+        env:
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          BUILD=/tmp/amisandbox-m2_6-build
+          ANALYSIS=/tmp/amisandbox-m2_6-analysis
+          EVIDENCE=/tmp/amisandbox-m2_6-evidence
+          IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
+          rm -rf "$ANALYSIS" "$EVIDENCE"
+          mkdir -p "$EVIDENCE"
+          rm -f "$IPC_SOCKET"
+          BEFORE_SHA=$(sha256sum "$BUILD/source.adf" | awk '{print $1}')
+          export ANALYSIS BUILD BEFORE_SHA IPC_SOCKET
+
+          python3 tools/amisandbox_launch.py \
+            --emulator ./build-m2_6/amiberry \
+            --analysis-dir "$ANALYSIS" \
+            --source "$BUILD/source.adf" \
+            --machine-profile a500-aros-ci \
+            --config-fingerprint github-actions-m2_6-guest-write \
+            -- \
+            --model A500 -G -S 0 --log \
+            > "$EVIDENCE/launch.log" 2>&1 &
+          LAUNCHER_PID=$!
+
+          cleanup() {
+            if kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+              kill "$LAUNCHER_PID" || true
+              wait "$LAUNCHER_PID" || true
+            fi
+            rm -f "$IPC_SOCKET"
+          }
+          trap cleanup EXIT
+
+          for i in $(seq 1 90); do
+            if [ -S "$IPC_SOCKET" ]; then break; fi
+            if ! kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+              cat "$EVIDENCE/launch.log"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          test -S "$IPC_SOCKET"
+
+          python3 - <<'PY'
+          import os, socket, time
+          path = os.environ['IPC_SOCKET']
+          deadline = time.monotonic() + 20
+          while True:
+              try:
+                  with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                      s.settimeout(1)
+                      s.connect(path)
+                      s.sendall(b'GET_VERSION\n')
+                      response = s.recv(4096).decode(errors='replace').strip()
+                  if response.startswith('OK'):
+                      print(response)
+                      break
+              except (FileNotFoundError, ConnectionRefusedError, socket.timeout):
+                  pass
+              if time.monotonic() >= deadline:
+                  raise SystemExit('IPC did not become ready')
+              time.sleep(.1)
+          PY
+
+          # The boot disk Startup-Sequence executes C:GuestWrite in the guest.
+          # Give the AROS fallback boot and floppy filesystem enough time to run
+          # and flush the two guest-created files before requesting clean exit.
+          sleep 15
+
+          python3 - <<'PY'
+          import os, socket
+          with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+              s.settimeout(2)
+              s.connect(os.environ['IPC_SOCKET'])
+              s.sendall(b'QUIT\n')
+              response = s.recv(4096).decode(errors='replace').strip()
+          assert response.startswith('OK'), response
+          print(response)
+          PY
+
+          wait "$LAUNCHER_PID"
+          trap - EXIT
+          rm -f "$IPC_SOCKET"
+
+          WORKING=$(python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          m = json.loads((Path(os.environ['ANALYSIS'])/'media/media-manifest.json').read_text())
+          print(m['working']['path'])
+          PY
+          )
+          export WORKING
+
+          xdftool "$WORKING" read M2_6_WITNESS.JSON "$EVIDENCE/witness.json"
+          cat "$EVIDENCE/witness.json"
+
+          OFFSET=$(cat "$BUILD/image-offset.txt")
+          export OFFSET
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          source = Path(os.environ['BUILD'])/'source.adf'
+          working = Path(os.environ['WORKING'])
+          marker = os.environ['MARKER_TEXT'].encode('ascii')
+          seed = os.environ['PLACEHOLDER_TEXT'].encode('ascii')
+          offset = int(os.environ['OFFSET'])
+          witness = json.loads((Path('/tmp/amisandbox-m2_6-evidence/witness.json')).read_text())
+          assert hashlib.sha256(source.read_bytes()).hexdigest() == os.environ['BEFORE_SHA']
+          assert source.read_bytes()[offset:offset+len(seed)] == seed
+          assert working.read_bytes()[offset:offset+len(marker)] == marker
+          assert witness['mutation_origin'] == 'guest'
+          assert witness['mechanism'] == 'guest-program'
+          assert int(witness['offset']) == offset
+          assert witness['marker_hex'].lower() == os.environ['MARKER_HEX'].lower()
+          print('PASS: guest-created witness and physical marker agree')
+          PY
+
+          python3 tools/amisandbox_guest_media_verify.py \
+            --analysis-dir "$ANALYSIS" \
+            --witness "$EVIDENCE/witness.json" \
+            --offset "$OFFSET" \
+            --marker-hex "$MARKER_HEX"
+
+          grep -F 'AmiSandbox: allowing writable disposable floppy media in analysis mode' "$EVIDENCE/launch.log"
+          echo 'PASS: M2.6 real guest-side filesystem mutation qualified'
+
+      - name: Upload M2.6 qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: amisandbox-m2_6-guest-media-evidence
+          path: |
+            /tmp/amisandbox-m2_6-build/
+            /tmp/amisandbox-m2_6-analysis/
+            /tmp/amisandbox-m2_6-evidence/
+          if-no-files-found: warn
+          retention-days: 14

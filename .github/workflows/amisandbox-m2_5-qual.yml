@@ -205,9 +205,9 @@ jobs:
           AMISANDBOX_ANALYSIS_DIR="$ANALYSIS" \
           AMISANDBOX_WRITABLE_MEDIA_COPY=1 \
           ./build-m2_5/amiberry \
+            --model A500 -G -S 0 --log \
             "-cfgparam=floppy0=$OUTSIDE" \
             -cfgparam=floppy_write_protect=false \
-            --model A500 -G -S 0 --log \
             > "$LOG" 2>&1
           RC=$?
           set -e
@@ -234,9 +234,9 @@ jobs:
 
           AMISANDBOX_ANALYSIS_DIR="$ANALYSIS" \
           xvfb-run -a ./build-m2_5/amiberry \
-            -cfgparam=floppy_write_protect=false \
-            "-cfgparam=floppy0=$MEDIA/original.adf" \
             --model A500 -G -S 0 --log \
+            "-cfgparam=floppy0=$MEDIA/original.adf" \
+            -cfgparam=floppy_write_protect=false \
             > "$LOG" 2>&1 &
           PID=$!
 

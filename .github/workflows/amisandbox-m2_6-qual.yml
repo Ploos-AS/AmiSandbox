@@ -132,6 +132,7 @@ jobs:
           path = Path(os.environ['WORK']) / 'source.adf'
           image = bytearray(path.read_bytes())
           seed = os.environ['PLACEHOLDER_TEXT'].encode('ascii')
+          marker = os.environ['MARKER_TEXT'].encode('ascii')
           sentinel = (os.environ['OFFSET_SENTINEL'] + '\n').encode('ascii')
 
           marker_offset = image.find(seed)
@@ -152,8 +153,8 @@ jobs:
 
           verify = path.read_bytes()
           assert verify[marker_offset:marker_offset + len(seed)] == seed
+          assert verify[marker_offset:marker_offset + len(marker)] != marker
           assert verify[sentinel_offset:sentinel_offset + len(encoded)] == encoded
-          assert os.environ['MARKER_TEXT'].encode('ascii') not in verify
 
           (Path(os.environ['WORK']) / 'image-offset.txt').write_text(
               f'{marker_offset}\n', encoding='ascii'

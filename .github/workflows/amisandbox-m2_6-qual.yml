@@ -28,7 +28,6 @@ jobs:
       MARKER_TEXT: AMISANDBOX-M2.6-GUEST-WRITE
       MARKER_HEX: 414d4953414e44424f582d4d322e362d47554553542d5752495445
       PLACEHOLDER_TEXT: AMISANDBOX-M2.6-HOST-SEED-X
-      OFFSET_SENTINEL: OFFSET00
 
     steps:
       - name: Check out repository
@@ -108,13 +107,13 @@ jobs:
 
           printf '%s' "$PLACEHOLDER_TEXT" > "$WORK/M2_6_MARKER"
           test "$(wc -c < "$WORK/M2_6_MARKER")" -eq "$(printf '%s' "$MARKER_TEXT" | wc -c)"
-          printf '%s\n' "$OFFSET_SENTINEL" > "$WORK/M2_6_OFFSET"
+          printf '00000000\n' > "$WORK/M2_6_OFFSET"
           test "$(wc -c < "$WORK/M2_6_OFFSET")" -eq 9
           printf 'C:GuestWrite\n' > "$WORK/Startup-Sequence"
 
-          # Build the complete filesystem layout once. M2_6_OFFSET is deliberately
-          # seeded with a fixed-size sentinel so its file blocks are allocated before
-          # the physical marker offset is measured.
+          # Build the complete filesystem layout first. The offset file is a fixed-size
+          # placeholder so all filesystem blocks, including the marker file, are
+          # allocated before we measure the marker's physical byte position.
           xdftool "$WORK/source.adf" format M26QUAL \
             + boot install \
             + makedir c \
@@ -129,43 +128,54 @@ jobs:
           import os
           from pathlib import Path
 
-          path = Path(os.environ['WORK']) / 'source.adf'
-          image = bytearray(path.read_bytes())
+          work = Path(os.environ['WORK'])
+          image = (work / 'source.adf').read_bytes()
           seed = os.environ['PLACEHOLDER_TEXT'].encode('ascii')
-          marker = os.environ['MARKER_TEXT'].encode('ascii')
-          sentinel = (os.environ['OFFSET_SENTINEL'] + '\n').encode('ascii')
 
           marker_offset = image.find(seed)
           assert marker_offset >= 0, 'placeholder not found in source ADF'
           assert image.find(seed, marker_offset + 1) < 0, 'placeholder is not unique'
 
-          sentinel_offset = image.find(sentinel)
-          assert sentinel_offset >= 0, 'offset sentinel not found in source ADF'
-          assert image.find(sentinel, sentinel_offset + 1) < 0, 'offset sentinel is not unique'
-
           encoded = f'{marker_offset:08d}\n'.encode('ascii')
-          assert len(encoded) == len(sentinel) == 9
-
-          # Raw in-place replacement changes file contents only; the AmigaDOS block
-          # allocation and marker location remain byte-for-byte stable.
-          image[sentinel_offset:sentinel_offset + len(sentinel)] = encoded
-          path.write_bytes(image)
-
-          verify = path.read_bytes()
-          assert verify[marker_offset:marker_offset + len(seed)] == seed
-          assert verify[marker_offset:marker_offset + len(marker)] != marker
-          assert verify[sentinel_offset:sentinel_offset + len(encoded)] == encoded
-
-          (Path(os.environ['WORK']) / 'image-offset.txt').write_text(
-              f'{marker_offset}\n', encoding='ascii'
-          )
-          print(f'PASS: stable guest marker slot at image offset {marker_offset}')
-          print(f'PASS: in-place guest offset record at image offset {sentinel_offset}')
+          assert len(encoded) == 9
+          (work / 'M2_6_OFFSET_FINAL').write_bytes(encoded)
+          (work / 'image-offset.txt').write_text(f'{marker_offset}\n', encoding='ascii')
+          print(f'PASS: measured guest marker slot at image offset {marker_offset}')
           PY
+
+          # Update the offset through AmigaDOS rather than patching raw ADF bytes.
+          # This lets xdftool regenerate the file-data metadata/checksum. Because the
+          # replacement is exactly the same size, the freed offset-file block should
+          # be reused; we explicitly prove below that the marker slot did not move.
+          xdftool "$WORK/source.adf" \
+            delete M2_6_OFFSET \
+            + write "$WORK/M2_6_OFFSET_FINAL" M2_6_OFFSET
 
           OFFSET=$(cat "$WORK/image-offset.txt")
           xdftool "$WORK/source.adf" read M2_6_OFFSET "$WORK/M2_6_OFFSET_READBACK"
           test "$(cat "$WORK/M2_6_OFFSET_READBACK")" = "$(printf '%08d' "$OFFSET")"
+
+          export OFFSET
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          image = (Path(os.environ['WORK']) / 'source.adf').read_bytes()
+          seed = os.environ['PLACEHOLDER_TEXT'].encode('ascii')
+          marker = os.environ['MARKER_TEXT'].encode('ascii')
+          expected = int(os.environ['OFFSET'])
+
+          actual = image.find(seed)
+          assert actual == expected, (
+              f'marker slot moved after filesystem-safe offset rewrite: '
+              f'expected {expected}, got {actual}'
+          )
+          assert image.find(seed, actual + 1) < 0, 'placeholder is not unique after rewrite'
+          assert image[expected:expected + len(seed)] == seed
+          assert image[expected:expected + len(marker)] != marker
+          print(f'PASS: filesystem-safe offset rewrite preserved marker slot {expected}')
+          PY
+
           sha256sum "$WORK/source.adf" | tee "$WORK/source.sha256"
 
       - name: Guest writes marker and witness inside Amiga

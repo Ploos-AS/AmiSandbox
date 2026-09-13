@@ -103,13 +103,17 @@ jobs:
             -m68000 -Os -noixemul \
             tools/m2_6_guest/guest_write_stdio.c \
             -o "$WORK/GuestWrite"
-          file "$WORK/GuestWrite"
+          "$HOME/opt/amiga/bin/m68k-amigaos-gcc" \
+            -m68000 -Os -noixemul \
+            tools/m2_6_guest/guest_probe.c \
+            -o "$WORK/GuestProbe"
+          file "$WORK/GuestWrite" "$WORK/GuestProbe"
 
           printf '%s' "$PLACEHOLDER_TEXT" > "$WORK/M2_6_MARKER"
           test "$(wc -c < "$WORK/M2_6_MARKER")" -eq "$(printf '%s' "$MARKER_TEXT" | wc -c)"
           printf '00000000\n' > "$WORK/M2_6_OFFSET"
           test "$(wc -c < "$WORK/M2_6_OFFSET")" -eq 9
-          printf 'C:GuestWrite\n' > "$WORK/Startup-Sequence"
+          printf 'C:GuestProbe\nC:GuestWrite\n' > "$WORK/Startup-Sequence"
 
           # Build the complete filesystem layout first. The offset file is a fixed-size
           # placeholder so all filesystem blocks, including the marker file, are
@@ -119,6 +123,7 @@ jobs:
             + makedir c \
             + makedir s \
             + write "$WORK/GuestWrite" c/GuestWrite \
+            + write "$WORK/GuestProbe" c/GuestProbe \
             + write "$WORK/Startup-Sequence" s/Startup-Sequence \
             + write "$WORK/M2_6_OFFSET" M2_6_OFFSET \
             + write "$WORK/M2_6_MARKER" M2_6_MARKER
@@ -143,10 +148,6 @@ jobs:
           print(f'PASS: measured guest marker slot at image offset {marker_offset}')
           PY
 
-          # Update the offset through AmigaDOS rather than patching raw ADF bytes.
-          # This lets xdftool regenerate the file-data metadata/checksum. Because the
-          # replacement is exactly the same size, the freed offset-file block should
-          # be reused; we explicitly prove below that the marker slot did not move.
           xdftool "$WORK/source.adf" \
             delete M2_6_OFFSET \
             + write "$WORK/M2_6_OFFSET_FINAL" M2_6_OFFSET
@@ -245,9 +246,6 @@ jobs:
               time.sleep(.1)
           PY
 
-          # The boot disk Startup-Sequence executes C:GuestWrite in the guest.
-          # Give the AROS fallback boot and floppy filesystem enough time to run
-          # and flush the two guest-created files before requesting clean exit.
           sleep 15
 
           python3 - <<'PY'
@@ -273,6 +271,21 @@ jobs:
           PY
           )
           export WORKING
+
+          # Diagnostic breadcrumbs must never substitute for the mandatory witness.
+          # They tell us whether Startup-Sequence reached GuestProbe/GuestWrite.
+          if xdftool "$WORKING" read M2_6_BOOTED "$EVIDENCE/M2_6_BOOTED"; then
+            echo 'M2.6 guest boot probe:'
+            cat "$EVIDENCE/M2_6_BOOTED"
+          else
+            echo 'M2.6 diagnostic: M2_6_BOOTED not created by guest'
+          fi
+          if xdftool "$WORKING" read M2_6_STAGE "$EVIDENCE/M2_6_STAGE"; then
+            echo 'M2.6 GuestWrite stage:'
+            cat "$EVIDENCE/M2_6_STAGE"
+          else
+            echo 'M2.6 diagnostic: M2_6_STAGE not created by guest'
+          fi
 
           xdftool "$WORKING" read M2_6_WITNESS.JSON "$EVIDENCE/witness.json"
           cat "$EVIDENCE/witness.json"

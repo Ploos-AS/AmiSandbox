@@ -39,6 +39,28 @@ std::string cfgparam_value(int argc, char* argv[], const std::string& key)
 	return {};
 }
 
+std::string floppy0_value(int argc, char* argv[])
+{
+	const std::string cfgparam = cfgparam_value(argc, argv, "floppy0");
+	if (!cfgparam.empty()) {
+		return cfgparam;
+	}
+
+	// Amiberry's native command-line interface mounts DF0 with "-0 <image>".
+	// M2.5 accepts that spelling only when it has a non-empty following value;
+	// trusted-path validation below remains identical for both syntaxes.
+	for (int i = 1; i < argc; ++i) {
+		const std::string arg = argv[i] ? argv[i] : "";
+		if (arg == "-0") {
+			if (i + 1 >= argc || argv[i + 1] == nullptr || *argv[i + 1] == '\0') {
+				return {};
+			}
+			return argv[i + 1];
+		}
+	}
+	return {};
+}
+
 bool path_is_within(const std::filesystem::path& child, const std::filesystem::path& parent)
 {
 	auto child_it = child.begin();
@@ -56,7 +78,7 @@ bool validated_writable_floppy(int argc, char* argv[], const char* output_dir)
 		return false;
 	}
 
-	const std::string floppy0 = cfgparam_value(argc, argv, "floppy0");
+	const std::string floppy0 = floppy0_value(argc, argv);
 	if (floppy0.empty()) {
 		return false;
 	}
@@ -115,13 +137,14 @@ int main(int argc, char* argv[])
 		std::fputs("AmiSandbox: forcing harddrive_write_protect=true in analysis mode\n", stderr);
 
 		// M2.3 keeps original removable-media evidence immutable. M2.5 permits
-		// writable media only when the caller explicitly opts in AND floppy0
-		// resolves to a regular file below this session's analysis/media tree.
-		// Any malformed opt-in fails closed instead of weakening M2.3.
+		// writable media only when the caller explicitly opts in AND DF0 (whether
+		// supplied as -cfgparam=floppy0=... or native -0 <image>) resolves to a
+		// regular file below this session's analysis/media tree. Any malformed
+		// opt-in fails closed instead of weakening M2.3.
 		const bool writable_media_requested = env_is_one("AMISANDBOX_WRITABLE_MEDIA_COPY");
 		const bool writable_media_valid = validated_writable_floppy(argc, argv, output_dir);
 		if (writable_media_requested && !writable_media_valid) {
-			std::fputs("AmiSandbox: writable media opt-in rejected; floppy0 must be a session working copy\n", stderr);
+			std::fputs("AmiSandbox: writable media opt-in rejected; DF0 must be a session working copy\n", stderr);
 			return 78;
 		}
 		if (writable_media_valid) {

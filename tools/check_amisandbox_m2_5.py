@@ -25,7 +25,8 @@ required_launch = [
     'AMISANDBOX_ANALYSIS_DIR',
     'AMISANDBOX_WRITABLE_MEDIA_COPY',
     'media-manifest.json',
-    'f"-cfgparam=floppy0={working}"',
+    '"-0"',
+    'str(working)',
     '"-cfgparam=floppy_write_protect=false"',
     'media_finalize',
 ]

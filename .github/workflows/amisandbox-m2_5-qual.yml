@@ -206,14 +206,14 @@ jobs:
           AMISANDBOX_WRITABLE_MEDIA_COPY=1 \
           ./build-m2_5/amiberry \
             --model A500 -G -S 0 --log \
-            "-cfgparam=floppy0=$OUTSIDE" \
+            -0 "$OUTSIDE" \
             -cfgparam=floppy_write_protect=false \
             > "$LOG" 2>&1
           RC=$?
           set -e
 
           test "$RC" -eq 78
-          grep -F 'AmiSandbox: writable media opt-in rejected; floppy0 must be a session working copy' "$LOG"
+          grep -F 'AmiSandbox: writable media opt-in rejected; DF0 must be a session working copy' "$LOG"
           echo 'PASS: M2.5 invalid writable-media opt-in failed closed'
 
       - name: Default analysis remains M2.3 read-only

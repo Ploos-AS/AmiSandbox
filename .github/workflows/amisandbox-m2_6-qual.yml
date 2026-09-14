@@ -182,6 +182,14 @@ jobs:
           rm -rf "$AROS_SYSTEM"
           AROS_ROOT=$(bash tools/fetch_aros_system.sh "$AROS_SYSTEM" | tail -n 1)
           test -d "$AROS_ROOT"
+
+          AROS_ROM="$AROS_ROOT/boot/amiga/aros-rom.bin"
+          AROS_EXT="$AROS_ROOT/boot/amiga/aros-ext.bin"
+          test -s "$AROS_ROM"
+          test -s "$AROS_EXT"
+          test "$(stat -c %s "$AROS_ROM")" -eq 524288
+          test "$(stat -c %s "$AROS_EXT")" -eq 524288
+
           STARTUP=$(find "$AROS_ROOT" -type f -ipath '*/s/startup-sequence' -print -quit)
           test -n "$STARTUP"
           cp "$STARTUP" "$STARTUP.m2_6-original"
@@ -190,8 +198,12 @@ jobs:
           DF0:C/GuestWrite
           SYS:C/Execute SYS:S/Startup-Sequence.m2_6-original
           EOF
+
           printf '%s\n' "$AROS_ROOT" > /tmp/amisandbox-m2_6-aros-root.txt
-          echo "PASS: prepared complete AROS boot root: $AROS_ROOT"
+          printf '%s\n' "$AROS_ROM" > /tmp/amisandbox-m2_6-aros-rom.txt
+          printf '%s\n' "$AROS_EXT" > /tmp/amisandbox-m2_6-aros-ext.txt
+          sha256sum "$AROS_ROM" "$AROS_EXT"
+          echo "PASS: prepared complete AROS boot root and matching ROM pair: $AROS_ROOT"
 
       - name: Guest writes marker and witness inside Amiga
         shell: bash
@@ -203,6 +215,8 @@ jobs:
           ANALYSIS=/tmp/amisandbox-m2_6-analysis
           EVIDENCE=/tmp/amisandbox-m2_6-evidence
           AROS_ROOT=$(cat /tmp/amisandbox-m2_6-aros-root.txt)
+          AROS_ROM=$(cat /tmp/amisandbox-m2_6-aros-rom.txt)
+          AROS_EXT=$(cat /tmp/amisandbox-m2_6-aros-ext.txt)
           IPC_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/amiberry.sock"
           rm -rf "$ANALYSIS" "$EVIDENCE"
           mkdir -p "$EVIDENCE"
@@ -218,6 +232,8 @@ jobs:
             --config-fingerprint github-actions-m2_6-guest-write \
             -- \
             --model A1200 -G -S 0 --log \
+            -r "$AROS_ROM" \
+            -K "$AROS_EXT" \
             -m "AROS:$AROS_ROOT" \
             > "$EVIDENCE/launch.log" 2>&1 &
           LAUNCHER_PID=$!
